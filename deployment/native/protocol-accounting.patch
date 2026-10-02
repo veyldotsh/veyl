@@ -1,0 +1,731 @@
+diff --git a/rust/crates/zkapi-client/src/lib.rs b/rust/crates/zkapi-client/src/lib.rs
+index 62c8584..5af1d02 100644
+--- a/rust/crates/zkapi-client/src/lib.rs
++++ b/rust/crates/zkapi-client/src/lib.rs
+@@ -6,5 +6,6 @@ pub mod testnet_auth;
+ pub mod error;
+ pub mod journal;
+ pub mod note_state;
++pub mod settlement;
+ #[path = "wallet_v2.rs"]
+ pub mod wallet;
+diff --git a/rust/crates/zkapi-client/src/settlement.rs b/rust/crates/zkapi-client/src/settlement.rs
+new file mode 100644
+index 0000000..34d6cbf
+--- /dev/null
++++ b/rust/crates/zkapi-client/src/settlement.rs
+@@ -0,0 +1,155 @@
++//! Private write-ahead record for a verified wallet transition and its receipt.
++//! Neither these files nor their prior note state may leave the wallet process.
++use std::fs::{self, File, OpenOptions};
++use std::io::{Read, Write};
++use std::path::{Path, PathBuf};
++
++use serde::{de::DeserializeOwned, Deserialize, Serialize};
++use zkapi_types::{canonical_response_hash, wire::RequestResponseV2};
++
++use crate::{error::ClientError, journal::PendingRequestJournal, note_state::NoteState};
++
++const MAX_RECORD_BYTES: u64 = 262_144;
++pub(crate) const MAX_RECEIPTS: usize = 10_000;
++
++#[derive(Clone, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub(crate) struct SettlementCommit {
++    pub version: u32,
++    pub prior_state: NoteState,
++    pub journal: PendingRequestJournal,
++    pub response: RequestResponseV2,
++    pub charge_cap: u128,
++}
++
++/// Local-only output returned after revalidating the signed wallet transition.
++/// A bridge must filter request payloads to the strict lease authorization
++/// schema before forwarding its quote; arbitrary request payloads are private.
++#[derive(Clone, Serialize)]
++pub struct VerifiedSettlement {
++    pub receipt_id: String,
++    pub client_request_id: String,
++    pub charge_units: String,
++    pub balance_units: String,
++    pub cap_units: String,
++    pub request_payload: Option<String>,
++}
++
++pub(crate) fn invalid() -> ClientError {
++    ClientError::VerificationFailed(
++        "settlement recovery record is inconsistent; preserve wallet files".into(),
++    )
++}
++
++pub(crate) fn equal<T: Serialize>(left: &T, right: &T) -> Result<bool, ClientError> {
++    Ok(serde_json::to_vec(left).map_err(|_| invalid())?
++        == serde_json::to_vec(right).map_err(|_| invalid())?)
++}
++
++pub(crate) fn receipt_path(state_dir: &Path, request_id: &str) -> PathBuf {
++    state_dir.join("verified-settlements").join(format!(
++        "{}.json",
++        canonical_response_hash(request_id.as_bytes()).to_hex()
++    ))
++}
++
++pub(crate) fn read<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ClientError> {
++    let metadata = match fs::symlink_metadata(path) {
++        Ok(value) => value,
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
++        Err(error) => return Err(error.into()),
++    };
++    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_RECORD_BYTES
++    {
++        return Err(invalid());
++    }
++    let mut bytes = Vec::new();
++    File::open(path)?
++        .take(MAX_RECORD_BYTES + 1)
++        .read_to_end(&mut bytes)?;
++    if bytes.len() as u64 > MAX_RECORD_BYTES {
++        return Err(invalid());
++    }
++    serde_json::from_slice(&bytes)
++        .map(Some)
++        .map_err(|_| invalid())
++}
++
++pub(crate) fn sync_directory(path: &Path) -> Result<(), ClientError> {
++    #[cfg(unix)]
++    File::open(path)?.sync_all()?;
++    #[cfg(not(unix))]
++    let _ = path;
++    Ok(())
++}
++
++pub(crate) fn write<T: Serialize>(path: &Path, value: &T) -> Result<(), ClientError> {
++    let bytes = serde_json::to_vec(value).map_err(|_| invalid())?;
++    if bytes.len() as u64 > MAX_RECORD_BYTES {
++        return Err(invalid());
++    }
++    let parent = path.parent().ok_or_else(invalid)?;
++    fs::create_dir_all(parent)?;
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::PermissionsExt;
++        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
++    }
++    if let Some(grandparent) = parent.parent() {
++        sync_directory(grandparent)?;
++    }
++    let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
++    let mut options = OpenOptions::new();
++    options.write(true).create_new(true);
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::OpenOptionsExt;
++        options.mode(0o600);
++    }
++    let mut file = options.open(&temp)?;
++    file.write_all(&bytes)?;
++    file.sync_all()?;
++    drop(file);
++    fs::rename(&temp, path)?;
++    sync_directory(parent)
++}
++
++pub(crate) fn clear(path: &Path) -> Result<(), ClientError> {
++    match fs::remove_file(path) {
++        Ok(()) => sync_directory(path.parent().ok_or_else(invalid)?),
++        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
++        Err(error) => Err(error.into()),
++    }
++}
++
++pub(crate) fn capacity(state_dir: &Path) -> Result<(), ClientError> {
++    let directory = state_dir.join("verified-settlements");
++    if !directory.exists() {
++        return Ok(());
++    }
++    let mut count = 0;
++    for item in fs::read_dir(directory)? {
++        let item = item?;
++        if item.path().extension().is_some_and(|ext| ext == "json") {
++            count += 1;
++        }
++        if count >= MAX_RECEIPTS {
++            return Err(ClientError::VerificationFailed(
++                "settlement retention is full; no new request is authorized".into(),
++            ));
++        }
++    }
++    Ok(())
++}
++
++// Test-only crash injection is impossible to enable in an installed binary.
++#[cfg(test)]
++thread_local! { pub(crate) static FAIL_AFTER: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) }; }
++
++pub(crate) fn checkpoint(_stage: &'static str) -> Result<(), ClientError> {
++    #[cfg(test)]
++    if FAIL_AFTER.with(|failure| failure.get() == Some(_stage)) {
++        return Err(std::io::Error::other("injected settlement crash").into());
++    }
++    Ok(())
++}
+diff --git a/rust/crates/zkapi-client/src/wallet_v2.rs b/rust/crates/zkapi-client/src/wallet_v2.rs
+index 6c11ee2..cded384 100644
+--- a/rust/crates/zkapi-client/src/wallet_v2.rs
++++ b/rust/crates/zkapi-client/src/wallet_v2.rs
+@@ -21,6 +21,7 @@ use crate::config::{ClientConfig, ClientProofMode};
+ use crate::error::ClientError;
+ use crate::journal::PendingRequestJournal;
+ use crate::note_state::NoteState;
++use crate::settlement::{self, SettlementCommit, VerifiedSettlement};
+ 
+ pub struct Wallet {
+     config: ClientConfig,
+@@ -44,12 +45,14 @@ impl Wallet {
+             .exists()
+             .then(|| NoteState::load(&state_path))
+             .transpose()?;
+-        Ok(Self {
++        let mut wallet = Self {
+             config,
+             state,
+             state_path,
+             journal_path,
+-        })
++        };
++        wallet.resume_settlement()?;
++        Ok(wallet)
+     }
+ 
+     pub fn state(&self) -> Option<&NoteState> {
+@@ -129,14 +132,19 @@ impl Wallet {
+         merkle_siblings: Vec<Felt252>,
+     ) -> Result<RequestResponseV2, ClientError> {
+         let request = self.prepare_request(payload, payload_hash, active_root, merkle_siblings)?;
+-        let response = crate::testnet_auth::request(self.config.chain_id, &self.config.server_url, reqwest::Method::POST, format!(
++        let response = crate::testnet_auth::request(
++            self.config.chain_id,
++            &self.config.server_url,
++            reqwest::Method::POST,
++            format!(
+                 "{}/v2/requests",
+                 self.config.server_url.trim_end_matches('/')
+-            ))?
+-            .json(&request)
+-            .send()
+-            .await
+-            .map_err(|error| ClientError::ServerError(error.to_string()))?;
++            ),
++        )?
++        .json(&request)
++        .send()
++        .await
++        .map_err(|error| ClientError::ServerError(error.to_string()))?;
+         let response = crate::testnet_auth::check_response(response)?;
+         let status = response.status();
+         let body = response
+@@ -172,6 +180,8 @@ impl Wallet {
+         active_root: Felt252,
+         merkle_siblings: Vec<Felt252>,
+     ) -> Result<ApiRequestV2, ClientError> {
++        self.resume_settlement()?;
++        settlement::capacity(self.state_path.parent().ok_or_else(settlement::invalid)?)?;
+         if self.has_pending_request() {
+             return Err(ClientError::PendingRequest);
+         }
+@@ -272,19 +282,75 @@ impl Wallet {
+         &mut self,
+         response: &RequestResponseV2,
+     ) -> Result<(), ClientError> {
+-        let journal =
+-            PendingRequestJournal::read(&self.journal_path)?.ok_or(ClientError::PendingRequest)?;
++        self.resume_settlement()?;
++        let Some(journal) = PendingRequestJournal::read(&self.journal_path)? else {
++            if let Some(saved) = self.saved_settlement(&response.client_request_id)? {
++                if settlement::equal(&saved.response, response)? {
++                    return Ok(());
++                }
++                return Err(settlement::invalid());
++            }
++            return Err(ClientError::PendingRequest);
++        };
++        settlement::capacity(self.state_path.parent().ok_or_else(settlement::invalid)?)?;
++        let commit = SettlementCommit {
++            version: 1,
++            prior_state: self.state.clone().ok_or(ClientError::NoActiveNote)?,
++            journal,
++            response: response.clone(),
++            charge_cap: if self.config.policy_enabled {
++                self.config.policy_charge_cap
++            } else {
++                self.config.request_charge_cap
++            },
++        };
++        self.validate_settlement(&commit)?;
++        settlement::checkpoint("verified")?;
++        settlement::write(
++            &self.state_path.with_file_name("settlement_commit.json"),
++            &commit,
++        )?;
++        settlement::checkpoint("commit-saved")?;
++        self.resume_settlement()
++    }
++
++    fn validate_settlement(&self, commit: &SettlementCommit) -> Result<NoteState, ClientError> {
++        let journal = &commit.journal;
++        let response = &commit.response;
++        if commit.version != 1
++            || !journal.exists
++            || response.status != "finalized"
++            || commit.prior_state.chain_id != self.config.chain_id
++            || commit.prior_state.contract_address != self.config.contract_address
++            || commit.prior_state.protocol_version != self.config.protocol_version
++            || commit.charge_cap == 0
++        {
++            return Err(settlement::invalid());
++        }
+         if let Some(prepared) = &journal.prepared_request {
++            if prepared.client_request_id != journal.client_request_id
++                || prepared.public_inputs.request_nullifier != journal.nullifier
++                || prepared.public_inputs.solvency_bound != commit.charge_cap
++            {
++                return Err(settlement::invalid());
++            }
+             let request_payload = serde_json::from_str::<serde_json::Value>(&prepared.payload).ok();
+-            if let Some(quote) = request_payload.as_ref().and_then(|payload| payload.get("billing_quote")) {
++            if let Some(quote) = request_payload
++                .as_ref()
++                .and_then(|payload| payload.get("billing_quote"))
++            {
+                 let settled: serde_json::Value = serde_json::from_str(&response.response_payload)
+-                    .map_err(|_| ClientError::VerificationFailed("invalid native settlement payload".into()))?;
++                    .map_err(|_| {
++                    ClientError::VerificationFailed("invalid native settlement payload".into())
++                })?;
+                 if settled.get("billing_quote") != Some(quote) {
+-                    return Err(ClientError::VerificationFailed("native settlement changed the authorized quote".into()));
++                    return Err(ClientError::VerificationFailed(
++                        "native settlement changed the authorized quote".into(),
++                    ));
+                 }
+             }
+         }
+-        let state = self.state.as_ref().ok_or(ClientError::NoActiveNote)?;
++        let state = &commit.prior_state;
+         let current = balance_commitment(
+             state.current_balance,
+             &parse_scalar(&state.balance_blinding)?,
+@@ -293,17 +359,98 @@ impl Wallet {
+         ensure_stored_commitment(state, &current)?;
+         let anonymous = rerandomize(&current, &journal.user_rerandomization)
+             .map_err(|error| ClientError::VerificationFailed(error.to_string()))?;
+-        self.apply_response(
++        self.validate_response(
++            state,
+             response,
+             &journal.client_request_id,
+             journal.nullifier,
+             &anonymous,
+             journal.user_rerandomization,
+-        )?;
+-        PendingRequestJournal::clear(&self.journal_path)?;
++            commit.charge_cap,
++        )
++    }
++
++    /// Finish the write-ahead transition after any interrupted disk boundary.
++    /// A receipt is durable before the pending request is removed. Replaying
++    /// against either the old or already installed state never charges twice.
++    fn resume_settlement(&mut self) -> Result<(), ClientError> {
++        let commit_path = self.state_path.with_file_name("settlement_commit.json");
++        let Some(commit) = settlement::read::<SettlementCommit>(&commit_path)? else {
++            return Ok(());
++        };
++        let next = self.validate_settlement(&commit)?;
++        let current = self.state.as_ref().ok_or(ClientError::NoActiveNote)?;
++        let installed = settlement::equal(current, &next)?;
++        if !installed && !settlement::equal(current, &commit.prior_state)? {
++            return Err(settlement::invalid());
++        }
++        match PendingRequestJournal::read(&self.journal_path)? {
++            Some(journal) if settlement::equal(&journal, &commit.journal)? => {}
++            None if installed => {}
++            _ => return Err(settlement::invalid()),
++        }
++        // This writer fsyncs the replacement and its containing directory.
++        settlement::write(&self.state_path, &next)?;
++        self.state = Some(next);
++        settlement::checkpoint("state-saved")?;
++        let receipt_path = settlement::receipt_path(
++            self.state_path.parent().ok_or_else(settlement::invalid)?,
++            &commit.journal.client_request_id,
++        );
++        if let Some(existing) = settlement::read::<SettlementCommit>(&receipt_path)? {
++            if !settlement::equal(&existing, &commit)? {
++                return Err(settlement::invalid());
++            }
++        } else {
++            settlement::write(&receipt_path, &commit)?;
++        }
++        settlement::checkpoint("receipt-saved")?;
++        settlement::clear(&self.journal_path)?;
++        settlement::checkpoint("journal-cleared")?;
++        settlement::clear(&commit_path)?;
++        settlement::checkpoint("commit-cleared")?;
+         Ok(())
+     }
+ 
++    fn saved_settlement(&self, request_id: &str) -> Result<Option<SettlementCommit>, ClientError> {
++        let path = settlement::receipt_path(
++            self.state_path.parent().ok_or_else(settlement::invalid)?,
++            request_id,
++        );
++        let Some(commit) = settlement::read::<SettlementCommit>(&path)? else {
++            return Ok(None);
++        };
++        if commit.journal.client_request_id != request_id {
++            return Err(settlement::invalid());
++        }
++        self.validate_settlement(&commit)?;
++        Ok(Some(commit))
++    }
++
++    /// Return only a reverified receipt. No HTTP/provider usage field enters
++    /// this path, and no private prior state or proof is returned to the caller.
++    pub fn verified_settlement(
++        &self,
++        request_id: &str,
++    ) -> Result<Option<VerifiedSettlement>, ClientError> {
++        let Some(commit) = self.saved_settlement(request_id)? else {
++            return Ok(None);
++        };
++        let next = self.validate_settlement(&commit)?;
++        let encoded = serde_json::to_vec(&commit).map_err(|_| settlement::invalid())?;
++        Ok(Some(VerifiedSettlement {
++            receipt_id: canonical_response_hash(&encoded).to_hex(),
++            client_request_id: request_id.to_owned(),
++            charge_units: commit.response.charge_applied.to_string(),
++            balance_units: next.current_balance.to_string(),
++            cap_units: commit.charge_cap.to_string(),
++            request_payload: commit
++                .journal
++                .prepared_request
++                .map(|request| request.payload),
++        }))
++    }
++
+     /// Clear a request that the server explicitly rejected before reserving its
+     /// nullifier (for example because the indexer root was stale).
+     pub fn clear_pending_request(&self) -> Result<(), ClientError> {
+@@ -314,14 +461,19 @@ impl Wallet {
+         let Some(journal) = PendingRequestJournal::read(&self.journal_path)? else {
+             return Ok(None);
+         };
+-        let response = crate::testnet_auth::request(self.config.chain_id, &self.config.server_url, reqwest::Method::GET, format!(
++        let response = crate::testnet_auth::request(
++            self.config.chain_id,
++            &self.config.server_url,
++            reqwest::Method::GET,
++            format!(
+                 "{}/v2/requests/{}",
+                 self.config.server_url.trim_end_matches('/'),
+                 journal.client_request_id
+-            ))?
+-            .send()
+-            .await
+-            .map_err(|error| ClientError::ServerError(error.to_string()))?;
++            ),
++        )?
++        .send()
++        .await
++        .map_err(|error| ClientError::ServerError(error.to_string()))?;
+         let response = crate::testnet_auth::check_response(response)?;
+         if response.status() == reqwest::StatusCode::NOT_FOUND {
+             return Ok(None);
+@@ -451,16 +603,21 @@ impl Wallet {
+         &self,
+         nullifier: &Felt252,
+     ) -> Result<ClearanceResponseV2, ClientError> {
+-        let response = crate::testnet_auth::request(self.config.chain_id, &self.config.server_url, reqwest::Method::POST, format!(
++        let response = crate::testnet_auth::request(
++            self.config.chain_id,
++            &self.config.server_url,
++            reqwest::Method::POST,
++            format!(
+                 "{}/v2/withdraw/clearance",
+                 self.config.server_url.trim_end_matches('/')
+-            ))?
+-            .json(&ClearanceRequest {
+-                withdrawal_nullifier: *nullifier,
+-            })
+-            .send()
+-            .await
+-            .map_err(|error| ClientError::ServerError(error.to_string()))?;
++            ),
++        )?
++        .json(&ClearanceRequest {
++            withdrawal_nullifier: *nullifier,
++        })
++        .send()
++        .await
++        .map_err(|error| ClientError::ServerError(error.to_string()))?;
+         let response = crate::testnet_auth::check_response(response)?;
+         let status = response.status();
+         let body = response
+@@ -473,14 +630,16 @@ impl Wallet {
+         serde_json::from_str(&body).map_err(|error| ClientError::InvalidResponse(error.to_string()))
+     }
+ 
+-    fn apply_response(
+-        &mut self,
++    fn validate_response(
++        &self,
++        state: &NoteState,
+         response: &RequestResponseV2,
+         request_id: &str,
+         nullifier: Felt252,
+         anonymous: &CurvePointWire,
+         rerandomization: Felt252,
+-    ) -> Result<(), ClientError> {
++        cap: u128,
++    ) -> Result<NoteState, ClientError> {
+         if response.client_request_id != request_id || response.request_nullifier != nullifier {
+             return Err(ClientError::VerificationFailed(
+                 "response request identity mismatch".to_string(),
+@@ -491,11 +650,6 @@ impl Wallet {
+                 "response payload hash mismatch".to_string(),
+             ));
+         }
+-        let cap = if self.config.policy_enabled {
+-            self.config.policy_charge_cap
+-        } else {
+-            self.config.request_charge_cap
+-        };
+         if response.charge_applied > cap || response.next_anchor.is_zero() {
+             return Err(ClientError::VerificationFailed(
+                 "invalid charge or next anchor".to_string(),
+@@ -512,7 +666,6 @@ impl Wallet {
+                 "next commitment algebra mismatch".to_string(),
+             ));
+         }
+-        let state = self.state.as_ref().ok_or(ClientError::NoActiveNote)?;
+         let message = core::state_message(
+             state.protocol_version,
+             state.chain_id,
+@@ -549,9 +702,7 @@ impl Wallet {
+         next.current_anchor = response.next_anchor;
+         next.is_genesis = false;
+         next.state_signature = Some(response.next_state_signature);
+-        next.save(&self.state_path)?;
+-        self.state = Some(next);
+-        Ok(())
++        Ok(next)
+     }
+ 
+     fn setup_dir(&self) -> &str {
+@@ -605,3 +756,204 @@ fn state_note_leaf(state: &NoteState) -> Felt252 {
+         state.expiry_ts,
+     )
+ }
++
++#[cfg(test)]
++mod settlement_tests {
++    use super::*;
++    use serde_json::json;
++    use zkapi_proof::compact::CompactSigner;
++
++    fn config(directory: &std::path::Path) -> ClientConfig {
++        let signer = CompactSigner::from_seed(&Felt252::from_u64(99));
++        ClientConfig {
++            protocol_version: 2,
++            chain_id: 1,
++            contract_address: Felt252::from_u64(1234),
++            request_charge_cap: 100,
++            policy_charge_cap: 100,
++            policy_enabled: false,
++            server_url: "http://127.0.0.1:1".into(),
++            state_dir: directory.to_string_lossy().into_owned(),
++            trusted_epoch_roots: vec![],
++            proof_mode: ClientProofMode::Groth16 {
++                setup_dir: "unused".into(),
++            },
++            state_signing_key: signer.public_key(),
++            clearance_signing_key: signer.public_key(),
++        }
++    }
++
++    fn fixture(charge: u128) -> (PathBuf, Wallet, RequestResponseV2) {
++        let directory =
++            std::env::temp_dir().join(format!("veyl-settlement-{}", uuid::Uuid::new_v4()));
++        let mut wallet = Wallet::new(config(&directory)).unwrap();
++        wallet
++            .confirm_deposit(Felt252::from_u64(42), 7, 1000, 4_000_000_000)
++            .unwrap();
++        let note = wallet.state().unwrap();
++        let nullifier = core::nullifier(&note.secret_s, &note.current_anchor);
++        let anonymous = rerandomize(
++            &CurvePointWire {
++                x: note.current_commitment_x,
++                y: note.current_commitment_y,
++            },
++            &Felt252::ONE,
++        )
++        .unwrap();
++        let next_commitment = server_update(&anonymous, charge, &Felt252::ONE).unwrap();
++        let next_anchor = Felt252::from_u64(123);
++        let signer = CompactSigner::from_seed(&Felt252::from_u64(99));
++        let message = core::state_message(
++            note.protocol_version,
++            note.chain_id,
++            &note.contract_address,
++            &next_commitment.x,
++            &next_commitment.y,
++            &next_anchor,
++        );
++        let payload = json!({"type":"oa_org_ephemeral_lease_settlement"}).to_string();
++        let response = RequestResponseV2 {
++            status: "finalized".into(),
++            client_request_id: uuid::Uuid::new_v4().to_string(),
++            request_nullifier: nullifier,
++            response_code: 200,
++            response_hash: canonical_response_hash(payload.as_bytes()),
++            response_payload: payload,
++            charge_applied: charge,
++            next_commitment,
++            next_anchor,
++            blind_delta_srv: Felt252::ONE,
++            next_state_signature: signer.sign(&message),
++            policy_reason_code: None,
++            policy_evidence_hash: None,
++        };
++        PendingRequestJournal::write(
++            &wallet.journal_path,
++            &PendingRequestJournal {
++                exists: true,
++                client_request_id: response.client_request_id.clone(),
++                nullifier,
++                payload_hash: Felt252::ONE,
++                user_rerandomization: Felt252::ONE,
++                created_at_ms: 1,
++                prepared_request: None,
++            },
++        )
++        .unwrap();
++        (directory, wallet, response)
++    }
++
++    #[test]
++    fn settlement_signed_zero_and_full_cap_survive_restart_without_double_charge() {
++        for charge in [0, 7, 100] {
++            let (directory, mut wallet, response) = fixture(charge);
++            wallet.complete_pending_response(&response).unwrap();
++            let before = wallet
++                .verified_settlement(&response.client_request_id)
++                .unwrap()
++                .unwrap();
++            assert_eq!(before.charge_units, charge.to_string());
++            assert_eq!(before.balance_units, (1000 - charge).to_string());
++            drop(wallet);
++            let mut restored = Wallet::new(config(&directory)).unwrap();
++            restored.complete_pending_response(&response).unwrap();
++            assert_eq!(restored.state().unwrap().current_balance, 1000 - charge);
++            assert_eq!(
++                restored
++                    .verified_settlement(&response.client_request_id)
++                    .unwrap()
++                    .unwrap()
++                    .receipt_id,
++                before.receipt_id
++            );
++            assert!(restored
++                .verified_settlement("foreign-call")
++                .unwrap()
++                .is_none());
++            std::fs::remove_dir_all(directory).unwrap();
++        }
++    }
++
++    #[test]
++    fn settlement_crash_at_each_commit_boundary_recovers_exactly_once() {
++        for stage in [
++            "verified",
++            "commit-saved",
++            "state-saved",
++            "receipt-saved",
++            "journal-cleared",
++            "commit-cleared",
++        ] {
++            let (directory, mut wallet, response) = fixture(7);
++            settlement::FAIL_AFTER.with(|failure| failure.set(Some(stage)));
++            assert!(
++                wallet.complete_pending_response(&response).is_err(),
++                "{stage}"
++            );
++            settlement::FAIL_AFTER.with(|failure| failure.set(None));
++            drop(wallet);
++            let mut restored = Wallet::new(config(&directory)).unwrap();
++            if stage == "verified" {
++                assert!(restored
++                    .verified_settlement(&response.client_request_id)
++                    .unwrap()
++                    .is_none());
++            }
++            restored.complete_pending_response(&response).unwrap();
++            let receipt = restored
++                .verified_settlement(&response.client_request_id)
++                .unwrap()
++                .unwrap();
++            assert_eq!(receipt.charge_units, "7", "{stage}");
++            assert_eq!(restored.state().unwrap().current_balance, 993, "{stage}");
++            assert!(!restored.journal_path.exists());
++            assert!(!directory.join("settlement_commit.json").exists());
++            std::fs::remove_dir_all(directory).unwrap();
++        }
++    }
++
++    #[test]
++    fn settlement_rejects_forged_charge_identity_signature_and_changed_duplicate() {
++        for field in ["charge", "identity", "signature", "payload", "status"] {
++            let (directory, mut wallet, response) = fixture(7);
++            let mut forged = response.clone();
++            match field {
++                "charge" => forged.charge_applied = 0,
++                "identity" => forged.client_request_id = "other".into(),
++                "signature" => forged.next_state_signature.s = Felt252::ZERO,
++                "status" => forged.status = "pending".into(),
++                _ => forged.response_payload = "{}".into(),
++            }
++            assert!(
++                wallet.complete_pending_response(&forged).is_err(),
++                "{field}"
++            );
++            assert_eq!(wallet.state().unwrap().current_balance, 1000);
++            assert!(wallet
++                .verified_settlement(&response.client_request_id)
++                .unwrap()
++                .is_none());
++            wallet.complete_pending_response(&response).unwrap();
++            assert!(wallet.complete_pending_response(&forged).is_err());
++            assert_eq!(wallet.state().unwrap().current_balance, 993);
++            std::fs::remove_dir_all(directory).unwrap();
++        }
++    }
++
++    #[test]
++    fn settlement_corruption_and_foreign_state_never_release_a_receipt() {
++        let (directory, mut wallet, response) = fixture(7);
++        settlement::FAIL_AFTER.with(|failure| failure.set(Some("commit-saved")));
++        assert!(wallet.complete_pending_response(&response).is_err());
++        settlement::FAIL_AFTER.with(|failure| failure.set(None));
++        let mut note = wallet.state().unwrap().clone();
++        note.current_balance = 1;
++        note.save(&wallet.state_path).unwrap();
++        assert!(Wallet::new(config(&directory)).is_err());
++        assert!(!settlement::receipt_path(&directory, &response.client_request_id).exists());
++        std::fs::write(directory.join("settlement_commit.json"), b"{broken").unwrap();
++        assert!(Wallet::new(config(&directory)).is_err());
++        assert!(directory.join("pending_journal.json").exists());
++        std::fs::remove_dir_all(directory).unwrap();
++    }
++}

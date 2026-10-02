@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "patch": "VEYL_CALL_ACCOUNTING_V1",
+  "daemonRevision": "b826c169b4831665822529f535f824265f50630b",
+  "companionRevision": "20aa542ae98e767c0507133fd34b12a56f5ccd3d",
+  "protocolRevision": "8b2d4e3da921f956e1eb6b93afbf722a877c060c",
+  "rustVersion": "1.91.1",
+  "officialPatches": [
+    {
+      "path": "zkapi-clientd/internal/zkapi/companion.patch",
+      "sha256": "ead12d1123f4cd6176b802d0b9f5eea33fdee350ac4cd6b11ae6eb4112308ed5"
+    },
+    {
+      "path": "zkapi-clientd/internal/zkapi/protocol-transport.patch",
+      "sha256": "068ff3c23fce7a7c571cc9184c308290823e62b29dd38ab1462b9359ff742bc7"
+    }
+  ],
+  "patches": [
+    {
+      "name": "companion",
+      "path": "deployment/native/companion-accounting.patch",
+      "bytes": 33163,
+      "sha256": "642e3950f474f60eadef8dc8b11c9a0b47d3797a22392b302b84e60cd495e693",
+      "files": [
+        {
+          "path": "crates/zkapi-clientd/src/lib.rs",
+          "originalSha256LF": "c1ddde5887211e89076b7d61a7e169f8b95aedc3a5e5ccd85e19d8ed3c579b6b",
+          "patchedSha256LF": "c97045937a5496a8398e54e431f0bb059dc7e1a0188ccc6ee4da34877f4fa1ee"
+        },
+        {
+          "path": "crates/zkapi-clientd/src/routes.rs",
+          "originalSha256LF": "6fb69a861b3c28c9209063b4748cfb938b0c6a89c2a219b2eba30ee65cb51cb4",
+          "patchedSha256LF": "75ebc1f932f4d3cf86a87c496b37883f2cc339bc44df5b18c2c45925a8eb9522"
+        },
+        {
+          "path": "crates/zkapi-clientd/src/service.rs",
+          "originalSha256LF": "42eb203dbb1f089965bea258660c1edff573ba3886d38d59d2c34381721bdbc1",
+          "patchedSha256LF": "b36638739fd9217f71aced7d6d7313abe79f8187ed77627b62ae6d1e18ffa893"
+        },
+        {
+          "path": "crates/zkapi-clientd/src/oa_accounting.rs",
+          "originalSha256LF": null,
+          "patchedSha256LF": "4338b818ab92573e486b483d1ab132c154f8ac1acf8fa87a0efd1eb97dd2cab2"
+        }
+      ]
+    },
+    {
+      "name": "protocol",
+      "path": "deployment/native/protocol-accounting.patch",
+      "bytes": 29648,
+      "sha256": "17d89d3f746fabc3472bda8c1a75ae6f8ca400f79d5458644f7729b59c6cbb8c",
+      "files": [
+        {
+          "path": "rust/crates/zkapi-client/src/lib.rs",
+          "originalSha256LF": "9651598a717c79ff28fcf3422415dbc7ac44d98b77c5da6852f29654de45bbc1",
+          "patchedSha256LF": "6f2cee768c93d9000198e0c4c94559eb8c42a4b92cac4f84132286321cc32911"
+        },
+        {
+          "path": "rust/crates/zkapi-client/src/wallet_v2.rs",
+          "originalSha256LF": "da31f53252e0938efdd62a6ce9516a68dfc76f26bdda6a09a88cf79c8c247838",
+          "patchedSha256LF": "9ff55f257927f9869d6249d1b4568b6568c06de4dba8cd937711770425eb176f"
+        },
+        {
+          "path": "rust/crates/zkapi-client/src/settlement.rs",
+          "originalSha256LF": null,
+          "patchedSha256LF": "5103f15e85d87478b4f778df91fd1e30a47ca0d1bb1aad76c6fe2241766f5e66"
+        }
+      ]
+    }
+  ]
+}
