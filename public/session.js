@@ -1,5 +1,6 @@
 let hostedSession = null, chainClient = null, mainnetPanel = null, mainnetPanelGeneration = 0, walletEventsBound = false, socialPanel = null, socialPanelGeneration = 0, runwayPanel = null, runwayPanelGeneration = 0, developerPanel = null, developerPanelGeneration = 0;
 async function sessionBootstrap() {
+  $('mode').hidden = true; $('mode').textContent = '';
   const response = await fetch('/api/session');
   if (!response.ok) throw new Error('The Veyl runtime is unavailable. Please try again shortly.');
   hostedSession = await response.json();
@@ -23,9 +24,9 @@ function renderSignIn(message = '') {
   state = null;
   document.querySelectorAll('[data-launch], .sidebar .nav').forEach(el => el.disabled = true);
   $('project-nav').innerHTML = ''; $('job-count').textContent = '0';
-  $('mode').textContent = 'PRIVATE WORKSPACE'; $('runtime-status').textContent = 'Sign in to continue';
+  $('mode').hidden = true; $('mode').textContent = ''; $('runtime-status').textContent = 'Sign in to continue';
   $('wallet-control').textContent = 'Connect wallet'; $('chain-label').textContent = 'Ethereum';
-  $('content').innerHTML = `<section class="signin-panel"><img src="/logo.svg" alt="" width="64" height="64"><p class="eyebrow">YOUR IDEAS HAVE A HOME.</p><h1>Welcome to Veyl.</h1><p>One workspace for your agents, their memory and the work they deliver.</p><button class="button" data-signin>Connect & sign in ↗</button><p class="hint">Sign an ownership message with your Ethereum wallet. Signing in costs no gas and sends no transaction.</p>${message ? `<p class="error" role="alert">${esc(message)}</p>` : ''}<a class="text-link" href="/market">View the public VEYL market →</a><br><a class="text-link" href="/docs#start">Get to know Veyl →</a></section>`;
+  $('content').innerHTML = `<section class="signin-panel"><img src="/logo.svg" alt="" width="64" height="64"><p class="eyebrow">YOUR IDEAS HAVE A HOME.</p><h1>Welcome to Veyl.</h1><p>One workspace for your agents, their memory and the work they deliver.</p><button class="button" data-signin>Connect & sign in ↗</button><p class="hint">Sign an ownership message with your Ethereum wallet. Signing in costs no gas and sends no transaction.</p><p class="hint">On mobile, open veyl.sh in your Ethereum wallet’s browser.</p>${message ? `<p class="error" role="alert">${esc(message)}</p>` : ''}<a class="text-link" href="/market">View the public VEYL market →</a><br><a class="text-link" href="/docs#start">Get to know Veyl →</a></section>`;
 }
 async function signIn(button) {
   button.disabled = true;

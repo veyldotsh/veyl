@@ -1,0 +1,138 @@
+/* Theme is optional. Existing light surfaces retain their original palette. */
+html{color-scheme:light}
+html[data-theme="dark"]{color-scheme:dark;background:#112019}
+html[data-theme="dark"] body{
+  --paper:#112019;--bg:#112019;--surface:#1a2d22;--ink:#edf2e5;
+  --muted:#bfceb6;--green:#c9e596;--lime:#c9e596;--line:#415844;--side:#0d1c14;
+  --theme-raised:#22382a;--theme-soft:#1d3325;--theme-link:#d1e8aa;
+  --fold-front:.2;--fold-back:.11;
+  background:var(--paper);color:var(--ink)
+}
+html[data-theme="dark"] ::selection{background:#c9e596;color:#17271c}
+html[data-theme="dark"] :is(a,button,summary,input,textarea,select):focus-visible{outline-color:#c9e596}
+
+/* Two separate, keyboard-accessible controls share the safe viewport corner. */
+button.veyl-theme-control{all:unset;box-sizing:border-box;position:fixed;right:70px;right:calc(max(16px,env(safe-area-inset-right)) + 54px);bottom:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:8;display:grid;place-items:center;width:44px;height:44px;color:#34533d;background:#f4f3e9;border:1px solid #cad5be;border-radius:50%;box-shadow:0 3px 12px #182a210b;cursor:pointer;transition:background .18s,border-color .18s}
+button.veyl-theme-control:hover{background:#e5ebdb;border-color:#809674}
+button.veyl-theme-control:focus-visible{outline:2px solid #35553b;outline-offset:4px}
+.veyl-theme-control svg{display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.veyl-theme-control .theme-sun{display:none}
+.veyl-theme-control[aria-pressed="true"] .theme-moon{display:none}
+.veyl-theme-control[aria-pressed="true"] .theme-sun{display:block}
+.veyl-theme-control::after{content:attr(data-tip);position:absolute;right:0;bottom:54px;width:max-content;max-width:calc(100vw - 90px);background:#182a21;color:#f4f3e9;padding:6px 10px;border-radius:3px;font:10px/1.5 system-ui,sans-serif;opacity:0;pointer-events:none;transition:opacity .18s}
+.veyl-theme-control:hover::after,.veyl-theme-control:focus-visible::after{opacity:1}
+/* Motion's tooltip also sits above the controls, never over its neighbour. */
+.veyl-motion-control::after{right:0;bottom:54px}
+html[data-theme="dark"] button:is(.veyl-theme-control,.veyl-motion-control){background:#203526;color:#d1e8aa;border-color:#647c55;box-shadow:0 3px 12px #0003}
+html[data-theme="dark"] button:is(.veyl-theme-control,.veyl-motion-control):hover{background:#2b4430;border-color:#a8c58c}
+html[data-theme="dark"] button.veyl-motion-control:disabled{color:#aabca1}
+html[data-theme="dark"] :is(.veyl-theme-control,.veyl-motion-control)::after{background:#d8e7c9;color:#182a21}
+
+/* Public pages: the folds remain green, with readable copy on every layer. */
+html[data-theme="dark"] :is(.landing,.documentation,.identity,.market-page) :is(p,li,small,dt,.section-number,.nav-links,.text-link,.token-address,.docs-eyebrow,.docs-topic-number,.docs-nav>a,.docs-nav>span,.docs-end>span,.site-footer>div,.site-footer>div>span){color:var(--muted)}
+html[data-theme="dark"] :is(.site-nav,.site-footer){background:rgba(17,32,25,.86);border-color:var(--line)}
+html[data-theme="dark"] :is(.site-nav,.site-footer) .logo-word,
+html[data-theme="dark"] body>main>img[src="/veyl-wordmark.svg"]{content:url('/veyl-wordmark-light.svg')}
+html[data-theme="dark"] :is(h1,h2) em{color:#c9e596}
+html[data-theme="dark"] :is(.nav-links a:hover,.nav-links a[aria-current="page"],.text-link:hover,.site-footer a:hover){color:var(--ink)}
+html[data-theme="dark"] .nav-cta{color:var(--ink);border-color:#829976}
+html[data-theme="dark"] .nav-cta:hover{background:var(--theme-raised)}
+html[data-theme="dark"] .lab{color:var(--muted);border-color:var(--line)}
+html[data-theme="dark"] .primary-link{background:#c9e596;color:#17271c;border-color:#c9e596}
+html[data-theme="dark"] .primary-link:hover{background:#d9edb6;border-color:#d9edb6}
+html[data-theme="dark"] :is(.text-link,.token-address a,.docs-action,.docs-end>a){color:var(--theme-link)}
+html[data-theme="dark"] :is(.quick-flow li>span,.brief-faq summary::after){color:#b3c89e}
+html[data-theme="dark"] .quick-flow li:hover>span{color:#d1e8aa}
+html[data-theme="dark"] .payment-flow span{background:var(--theme-soft);border-color:var(--line);color:var(--ink)}
+html[data-theme="dark"] .payment-flow b{color:#b4cba0}
+html[data-theme="dark"] .market-heading h1 span{color:var(--muted)}
+html[data-theme="dark"] .market-stats{background:rgba(26,45,34,.9)}
+html[data-theme="dark"] .market-notice{background:#23392a;color:#d1e2bc}
+html[data-theme="dark"] .market-notice.error{background:#463922;color:#f3d493}
+html[data-theme="dark"] .market-refresh:hover{background:var(--theme-raised)}
+
+/* Documentation includes code, tables, expanded disclosures and callouts. */
+html[data-theme="dark"] :is(.docs-nav,.docs-nav-note,.docs-overview>div,.docs-topics,.docs-topic,.docs-topic-body th,.docs-topic-body td){border-color:var(--line)}
+html[data-theme="dark"] :is(.docs-nav-note,.docs-topic-heading>span,.docs-topic summary small,.docs-overview dd>span,.docs-topic-body caption){color:var(--muted)}
+html[data-theme="dark"] :is(.docs-nav>a:hover,.docs-nav>a[aria-current],.docs-topic summary strong,.docs-status strong,.docs-overview b,.docs-topic-body strong){color:var(--ink)}
+html[data-theme="dark"] .docs-topic summary:hover strong{color:#d1e8aa}
+html[data-theme="dark"] :is(.docs-topic summary::after,.docs-topic-number){color:#b5c89f}
+html[data-theme="dark"] .docs-status{background:var(--theme-soft);border-color:var(--line)}
+html[data-theme="dark"] .docs-status>span{background:#b4d28f}
+html[data-theme="dark"] .docs-topic-body :is(a,.docs-action){color:var(--theme-link)}
+html[data-theme="dark"] .docs-topic-body :is(pre,code){background:#203626;color:#d1e6b7;border-color:#48603f}
+html[data-theme="dark"] .docs-topic-body pre code{background:transparent}
+html[data-theme="dark"] .docs-callout{background:#233a29;border-color:#9aba79}
+html[data-theme="dark"] .docs-flow{background:#0b1911;color:#d1e2bd}
+html[data-theme="dark"] .docs-topic-body :is(th,td){color:var(--muted)}
+html[data-theme="dark"] .docs-topic-body thead th{background:#253d2b;color:#e0ebd1}
+html[data-theme="dark"] .docs-topic-body tbody th{color:#d1e8aa}
+
+/* Artwork and palette swatches keep their original colours on the brand page. */
+html[data-theme="dark"] :is(.download-heading>span,.download-grid h3>span,.brand-guide summary small,.swatch){color:var(--muted)}
+html[data-theme="dark"] :is(.banner-copy>a,.download-grid a){color:var(--theme-link);border-color:#738969}
+html[data-theme="dark"] .download-grid a:hover{color:var(--ink)}
+html[data-theme="dark"] :is(.identity-banner>img,.avatar-specimen){border-color:var(--line)}
+html[data-theme="dark"] .brand-guide summary::after{color:#b5c89f}
+html[data-theme="dark"] .avatar-specimen :is(.identity-caption,.avatar-download){color:#3c5630}
+
+/* Workspace: surface hierarchy rather than a blanket inversion. */
+html[data-theme="dark"] .main-shell>header{background:#17291e;border-color:var(--line)}
+html[data-theme="dark"] :is(.stat,.agent-card,.panel,.tool){background:var(--surface);border-color:var(--line)}
+html[data-theme="dark"] .agent-card:hover{border-color:#8ca976}
+html[data-theme="dark"] :is(.hero,.new-card,.strip,.role,.job,.quote-card,.choice,.memory-note,.address,.artifact pre,details pre){background:var(--theme-soft);border-color:var(--line)}
+html[data-theme="dark"] .template:hover{background:var(--theme-raised)}
+html[data-theme="dark"] :is(.eyebrow,.hero p.description,.hero-note,.node-label,.agent-card .symbol,.card-bottom,.role span,.empty,details summary,.included,.fee-legend small,.fee-pending span,.main-shell>footer){color:var(--muted)}
+html[data-theme="dark"] :is(.hero h1 em,.quiet,.text-link,.template .glyph,.strip .glyph,.empty b,.tool .tool-state,.choice-icon,.fee-legend b,.card-bottom b,.new-card .plus){color:#c9e596}
+html[data-theme="dark"] .avatar{background:#2a412c;color:#d1e8aa;border-color:#546e44}
+html[data-theme="dark"] .avatar.blue{background:#243a40;color:#b8d5e3;border-color:#496772}
+html[data-theme="dark"] .avatar.purple{background:#383344;color:#d6c7e5;border-color:#625870}
+html[data-theme="dark"] .node{background:#253e2d;color:#d1e8aa;border-color:#70895f;box-shadow:none}
+html[data-theme="dark"] .node.core{background:#35583a;color:#e0efbd}
+html[data-theme="dark"] .badge{background:#2a402c;color:#d0e3b8;border-color:#536d43}
+html[data-theme="dark"] .button{background:#c9e596;color:#17271c;border-color:#c9e596}
+html[data-theme="dark"] .button:hover{background:#d9edb6;border-color:#d9edb6}
+html[data-theme="dark"] .button.secondary{background:transparent;color:#d1e8aa;border-color:#718b60}
+html[data-theme="dark"] .button.secondary:hover{background:#2b4430;border-color:#aac58d}
+html[data-theme="dark"] .button:disabled{opacity:.6}
+html[data-theme="dark"] .tab.active{color:#d1e8aa;border-bottom-color:#c9e596}
+html[data-theme="dark"] :is(input:not([type=radio]):not([type=checkbox]),textarea,select){background:#13241a;color:var(--ink);border-color:#607655;caret-color:#d1e8aa}
+html[data-theme="dark"] :is(input,textarea)::placeholder{color:#a7b99b;opacity:1}
+html[data-theme="dark"] select option{background:#13241a;color:#edf2e5}
+html[data-theme="dark"] :is(input,textarea,select):focus{outline-color:#c9e596}
+html[data-theme="dark"] :is(input,textarea,select):disabled{color:#a4b198;background:#263629;opacity:1}
+html[data-theme="dark"] input:autofill{box-shadow:0 0 0 1000px #253b29 inset;color:#edf2e5}
+html[data-theme="dark"] input:-webkit-autofill{-webkit-box-shadow:0 0 0 1000px #253b29 inset;-webkit-text-fill-color:#edf2e5;caret-color:#edf2e5}
+html[data-theme="dark"] input:is([type=checkbox],[type=radio]){accent-color:#c9e596}
+html[data-theme="dark"] .choice:has(input:checked){background:#2a432e;border-color:#bdd694}
+html[data-theme="dark"] .info-box{background:#273e2a;color:#d0dfbc;border-color:#61784e}
+html[data-theme="dark"] .status{background:#2b452d;color:#d1e8aa}
+html[data-theme="dark"] :is(.status.interrupted,.step.running){background:#493d22;color:#f4d996}
+html[data-theme="dark"] .step{color:var(--muted);border-color:var(--line)}
+html[data-theme="dark"] .step.completed{background:#29452b;color:#d1e8aa}
+html[data-theme="dark"] .error{color:#ffb4a4}
+html[data-theme="dark"] .storage-alert{background:#462c25;color:#ffd1bd;border-color:#ae7b61}
+html[data-theme="dark"] .runway-expiry-warning,
+html[data-theme="dark"] .runway-expiry-unknown{border-left-color:#d4b36e}
+html[data-theme="dark"] .runway-expiry-blocked,
+html[data-theme="dark"] .runway-expiry-expired{border-left-color:#e79b7e}
+html[data-theme="dark"] dialog{background:#192c21;color:var(--ink);border-color:#70855f;box-shadow:0 30px 90px #0006}
+html[data-theme="dark"] dialog::backdrop{background:#020c08d9}
+html[data-theme="dark"] .wizard-steps{color:#b2c0a7}
+html[data-theme="dark"] .wizard-steps .current{color:#d1e8aa}
+html[data-theme="dark"] #toast{background:#d1e4b8;color:#172b1d;border-color:#adc98e}
+html[data-theme="dark"] .developer-secret{border-color:#9dbf80}
+html[data-theme="dark"] :is(.skip-link,.docs-skip){background:#d1e4b8;color:#172b1d}
+
+/* The OAuth return page deliberately has no application layout or body class. */
+html[data-theme="dark"] body>main>p#status{color:var(--muted)}
+html[data-theme="dark"] body>main>p#status+a{color:var(--theme-link)}
+@media(max-width:760px){
+  button.veyl-theme-control{right:66px;bottom:max(12px,env(safe-area-inset-bottom))}
+  html[data-theme="dark"] body{--fold-front:.16;--fold-back:.085}
+}
+@media(prefers-reduced-motion:reduce){button.veyl-theme-control,.veyl-theme-control::after{transition:none}}
+@media print{button.veyl-theme-control{display:none}}
+
+/* Keep end-of-page content above the appearance controls. */
+.site-footer,.main-shell>footer,.docs-end{padding-bottom:max(72px,calc(env(safe-area-inset-bottom) + 64px))}

@@ -83,6 +83,8 @@ export function createApp(kit) {
       assets['/market.js'] = ['market.js', 'text/javascript'];
       assets['/ambient.css'] = ['ambient.css', 'text/css'];
       assets['/ambient.js'] = ['ambient.js', 'text/javascript'];
+      assets['/theme.css'] = ['theme.css', 'text/css'];
+      assets['/theme.js'] = ['theme.js', 'text/javascript'];
       assets['/ambient-fold.svg'] = ['ambient-fold.svg', 'image/svg+xml'];
       for (const file of ['site.html', 'index.html', 'docs.html', 'developers.html', 'brand.html', 'oauth-callback.html', 'market.html']) assets[`/${file}`] = [file, 'text/html'];
       assets['/developer-panel.css'] = ['developer-panel.css', 'text/css'];
