@@ -60,7 +60,11 @@ export class WalletAuth {
     if (typeof signature !== 'string' || !/^0x[a-fA-F0-9]{130}$/.test(signature)) throw new Problem('Invalid wallet signature.', 401);
     this.verifying.add(id);
     try {
-      if (!await this.verify({ address: challenge.address, message: challenge.message, signature })) throw new Problem('Invalid wallet signature.', 401);
+      let valid = false;
+      // Correct-length hex can still have invalid ECDSA scalars or recovery bits.
+      // The local verifier throws for these inputs; they are rejected sign-ins.
+      try { valid = await this.verify({ address: challenge.address, message: challenge.message, signature }); } catch {}
+      if (!valid) throw new Problem('Invalid wallet signature.', 401);
       if (challenge.expires <= this.now()) throw new Problem('Sign-in challenge expired.', 401);
       if (this.state.sessions.length >= this.maxSessions) throw new Problem('Active session capacity has been reached. Try again later.', 503);
       const token = random(), csrf = random();
