@@ -36,3 +36,71 @@ jobs:
       - run: forge test --root contracts
       - run: npm test
       - run: npm run build
+
+  publish:
+    name: Publish website
+    needs: verify
+    if: >-
+      github.repository == 'veyldotsh/veyl' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://veyl.sh
+    permissions:
+      contents: read
+    concurrency:
+      group: veyl-website-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.0'
+      - name: Install pinned deployment CLI
+        run: npm install --global vercel@59.15.1
+      - name: Check that this is still the main branch head
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_sha="$(gh api repos/veyldotsh/veyl/git/ref/heads/main --jq .object.sha)"
+          if [ "$current_sha" = "$EXPECTED_SHA" ]; then
+            echo 'current=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            echo 'A newer commit is on main. Skipping this older release.'
+          fi
+      - name: Deploy verified source to the existing Veyl project
+        if: steps.head.outputs.current == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VEYL_VERCEL_TOKEN }}
+          VERCEL_ORG_ID: team_Mrvl1KQpmLxv32qf6tvfTr2h
+          VERCEL_PROJECT_ID: prj_WdeumvumalekAKpT7hBH8Yl9AATa
+          NO_COLOR: '1'
+        run: |
+          set -euo pipefail
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo 'The project-scoped VEYL_VERCEL_TOKEN production environment secret is missing.' >&2
+            exit 1
+          fi
+          deployment_url="$(vercel deploy --prod --yes --archive=tgz)"
+          if [[ ! "$deployment_url" =~ ^https://[a-zA-Z0-9.-]+\.vercel\.app$ ]]; then
+            echo 'Deployment completed without a recognized deployment URL.' >&2
+            exit 1
+          fi
+          printf 'Published [%s](%s) from commit `%s`.\n' "$deployment_url" "$deployment_url" "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Check public website routes
+        if: steps.head.outputs.current == 'true'
+        run: |
+          set -euo pipefail
+          for route in / /app /docs /developers; do
+            curl --fail --silent --show-error --retry 2 --max-time 30 --output /dev/null "https://veyl.sh$route"
+          done

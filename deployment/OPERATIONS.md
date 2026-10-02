@@ -1,5 +1,13 @@
 # Veyl runtime operations
 
+## Automatic website publishing
+
+The GitHub workflow publishes successful pushes to `main` in `veyldotsh/veyl` to the existing Vercel project serving `https://veyl.sh`. Publishing waits for the contract, application and build checks. Pull requests cannot run the production job. The `production` environment permits only `main`, and a newer main commit causes an older queued release to skip publishing.
+
+`VEYL_VERCEL_TOKEN` is an encrypted GitHub environment secret restricted to the Veyl Vercel project. The current token expires on 31 December 2026; rotate it before expiry. The workflow uses standard GitHub runners, with no additional Vercel team seat. Existing Vercel usage charges still apply. Vercel builds the source remotely, so the workflow does not download the worker gateway secret. Publishing the website does not deploy contracts, enable spending, or upgrade the persistent worker.
+
+## Hosted runtime
+
 Vercel serves the static site and a signed HTTP gateway. The persistent Node worker owns encrypted account data, the queue, agent tools and dedicated zkAPI profiles. Each project keeps its own daemon wallet and recovery journal. The shared-host pilot permits **50 registered profiles, at most 10 per owner, with one active daemon pair** on demand. An idle pair can stop only after there are no inference or funding leases and the daemon reports no pending settlement, withdrawal or public return. Profile and wallet files remain in place. An exited parent does not release capacity until its owned process group exits and both ports are free. This is bounded capacity on one machine, not automatic horizontal scaling.
 
 The default durable queue admits 100 jobs, at most 10 per wallet, with one running job globally. Waiting jobs do not retain daemon leases. Reservations are persisted before admission. Restart preserves only queued records that match both ledgers; interrupted dispatch is uncertain and never automatically retried. A queued cancellation keeps its conservative reservation until independently reconciled. Model tool calls can read allowed sources, read Ethereum balances, save project notes and prepare social drafts. They cannot publish, sign transactions or execute arbitrary code.
