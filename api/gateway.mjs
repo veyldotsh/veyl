@@ -14,6 +14,14 @@ export default async function gateway(req, res) {
     const incoming = new URL(req.url, publicOrigin), route = incoming.searchParams.get('veyl_path');
     const pathname = route !== null ? '/api/' + route : incoming.pathname;
     if (incoming.searchParams.getAll('veyl_path').length > 1 || !/^\/api\/[a-zA-Z0-9/_-]{1,200}$/.test(pathname) || pathname.includes('//') || pathname === '/api/gateway') return fail(404, 'Not found.');
+    // Vercel also forwards the named :path* capture from vercel.json as a
+    // query parameter. Consume only the exact matching routing metadata;
+    // genuine API queries still reach the worker's strict validation.
+    if (route !== null && incoming.searchParams.has('path')) {
+      const captures = incoming.searchParams.getAll('path');
+      if (captures.length !== 1 || captures[0] !== route) return fail(404, 'Not found.');
+      incoming.searchParams.delete('path');
+    }
     const developerPath = pathname.startsWith('/api/developer/v1/'), bearer = req.headers.authorization;
     if (bearer !== undefined && (!developerPath || req.headers.origin || req.headers.cookie)) return fail(403, 'Developer credentials require a server-to-server developer endpoint.');
     if (developerPath && (typeof bearer !== 'string' || !/^Bearer veyl_sk_[a-f0-9]{64}$/.test(bearer))) return fail(401, 'A developer bearer key is required.');

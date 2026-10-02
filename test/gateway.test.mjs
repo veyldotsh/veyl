@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import gateway from '../api/gateway.mjs';
 import { GatewayVerifier } from '../src/gateway-auth.mjs';
+import { developerRequest } from '../src/developer-api.mjs';
 
 function setup(t) {
   const previous = Object.fromEntries(['PUBLIC_ORIGIN', 'VEYL_RUNTIME_ORIGIN', 'VEYL_GATEWAY_KEY'].map(key => [key, process.env[key]])), originalFetch = globalThis.fetch;
@@ -46,6 +47,41 @@ test('gateway binds bearer only on developer routes and refuses browser or owner
     request('/api/gateway?veyl_path=developer/v1/project', { headers: { origin: 'https://evil.invalid', authorization: 'Bearer ' + token } })
   ]) { const rejected = response(); await gateway(req, rejected); assert.equal(rejected.statusCode, 403); assert.ok(!rejected.body.includes(token)); }
   assert.equal(calls, 1);
+});
+
+test('gateway consumes the matching Vercel path capture while preserving strict developer queries and signed authorization', async t => {
+  setup(t); const token = 'veyl_sk_' + 'a'.repeat(64), projectId = 'project-id', requestKey = 'request-key-12345'; let calls = 0;
+  globalThis.fetch = async (url, init) => {
+    calls++; const parsed = new URL(url);
+    new GatewayVerifier({ key: process.env.VEYL_GATEWAY_KEY }).verify({ method: init.method, path: parsed.pathname + parsed.search, headers: init.headers, body: Buffer.alloc(0) });
+    assert.equal(init.headers.authorization, 'Bearer ' + token);
+    try {
+      const result = await developerRequest({ identity: { projectId, scopes: ['read'] }, method: init.method, url: parsed, body: {}, registry: {}, kit: { project: id => ({ id }), store: { data: { jobs: [{ projectId, requestKey, id: 'job-id' }] } } } });
+      return new Response(JSON.stringify(result.body), { status: result.status, headers: { 'content-type': 'application/json' } });
+    } catch (error) { return new Response(JSON.stringify({ error: error.message }), { status: error.status || 500 }); }
+  };
+  for (const [route, query, status] of [
+    ['project', '', 200],
+    ['jobs', '&requestKey=' + requestKey, 200],
+    ['project', '&unexpected=value', 400],
+    ['jobs', '&requestKey=' + requestKey + '&requestKey=another-key-12345', 400]
+  ]) {
+    const path = 'developer/v1/' + route, res = response();
+    await gateway(request('/api/gateway?veyl_path=' + path + '&path=' + encodeURIComponent(path) + query, { headers: { origin: undefined, authorization: 'Bearer ' + token } }), res);
+    assert.equal(res.statusCode, status);
+    if (status === 200) assert.equal(route === 'project' ? JSON.parse(res.body).project.id : JSON.parse(res.body).jobs[0].id, route === 'project' ? projectId : 'job-id');
+  }
+  assert.equal(calls, 4);
+});
+
+test('gateway rejects ambiguous rewrite captures without dropping genuine query parameters', async t => {
+  setup(t); let calls = 0;
+  globalThis.fetch = async url => { calls++; assert.equal(url, 'https://runtime.veyl.sh/api/state?path=caller-query'); return new Response('{}'); };
+  for (const url of [
+    '/api/gateway?veyl_path=state&path=other',
+    '/api/gateway?veyl_path=state&path=state&path=state'
+  ]) { const res = response(); await gateway(request(url), res); assert.equal(res.statusCode, 404); }
+  const direct = response(); await gateway(request('/api/state?path=caller-query'), direct); assert.equal(direct.statusCode, 200); assert.equal(calls, 1);
 });
 
 test('gateway rejects cross-origin writes, duplicate routes, oversized bodies and missing worker without contacting upstream', async t => {
