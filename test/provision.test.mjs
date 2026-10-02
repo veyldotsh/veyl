@@ -5,7 +5,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:http';
 import { RuntimeProvisioner } from '../src/runtime-provision.mjs';
+import { ZkApiProvider } from '../src/provider.mjs';
+import { Store } from '../src/store.mjs';
+import { Kit } from '../src/kit.mjs';
 
 function fixture(t, overrides = {}) {
   const directory = mkdtempSync(resolve(tmpdir(), 'veyl-provision-'));
@@ -87,4 +91,27 @@ test('verifier migration does not accept arbitrary origins or simultaneous profi
     await assert.rejects(provisioner.provision(owner, projectId), /profile differs/);
     assert.equal(calls.length, 0); assert.equal(readFileSync(file, 'utf8'), bytes);
   }
+});
+test('catalog outage leaves existing wallet accounting reachable but cannot admit a paid job', async t => {
+  const requests = [], journalId = 'a'.repeat(32), callId = randomUUID();
+  const server = createServer((req, res) => {
+    requests.push({ path: req.url, method: req.method }); res.setHeader('Content-Type', 'application/json');
+    const responses = { '/healthz': { status: 'ok' }, '/admin/status': { backend: 'zkapi', network: 'mainnet', request_budget_policy: 'model' },
+      '/v1/accounting': { version: 1, journal_id: journalId }, ['/v1/call-settlements/' + callId]: { status: 'bound', call_id: callId } };
+    if (req.url === '/v1/models') { res.writeHead(500); res.end('{}'); }
+    else if (responses[req.url]) res.end(JSON.stringify(responses[req.url]));
+    else { res.writeHead(500); res.end('{}'); }
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise(resolve => server.close(resolve)));
+  const { provisioner, directory } = fixture(t, { firstPort: server.address().port, maxProfiles: 2, checkReady: undefined });
+  const projectId = randomUUID(), entry = await provisioner.provision(owner, projectId);
+  const provider = new ZkApiProvider({ base: entry.origin, key: entry.key });
+  assert.equal((await provider.callSettlement(callId)).status, 'bound');
+  assert.ok(!requests.some(r => r.path === '/v1/models'), 'runtime readiness must not depend on public catalog');
+  const store = new Store(resolve(directory, 'kit.json'), 'zkapi'), kit = new Kit({ store, provider, chain: { status: async () => ({ ready: false }) } });
+  const project = kit.create({ requestKey: randomUUID(), name: 'Recovery fixture', symbol: 'RCV', purpose: 'Test policy outage.', template: 'research', swarm: false, model: 'test/model', total: 4004000, daily: 4004000, request: 1001000 });
+  await assert.rejects(kit.submit(project.id, { requestKey: randomUUID(), prompt: 'Do not dispatch during outage.' }), /HTTP 500/);
+  assert.equal(project.committed, 0); assert.equal(store.data.jobs.length, 0);
+  assert.equal(requests.filter(r => r.method !== 'GET').length, 0, 'no lease or inference dispatch');
+  assert.equal((await provider.callSettlement(callId)).status, 'bound', 'recovery reads remain available after failed admission');
 });

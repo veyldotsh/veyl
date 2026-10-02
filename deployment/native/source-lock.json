@@ -75,8 +75,8 @@
     {
       "name": "go",
       "path": "deployment/native/go-accounting.patch",
-      "bytes": 61246,
-      "sha256": "fa439a54bde2231dc5a164902f9afcf05494f8214ab018e03ddc0b91b439698a",
+      "bytes": 63347,
+      "sha256": "ff0a2f7ecf5b8ed8e18e881494332fdb006a3be1c977526f78f55a06c8660867",
       "files": [
         {
           "path": "zkapi-clientd/cmd/zkapi-clientd/configure.go",
@@ -181,7 +181,7 @@
         {
           "path": "zkapi-clientd/internal/zkapi/model_budget_test.go",
           "originalSha256LF": "ba1df77c874d7b8fecc6e88d3c5d438df394dca37b51deea931f00531201df34",
-          "patchedSha256LF": "a1280e8a2e2dbc6d50c366540c16f911b3d9c76434ccb82e2cdd84b42ddbcad5"
+          "patchedSha256LF": "9f717d50c32176a62a489bd9fe2fed023e030534d305e212321009224eb19cad"
         },
         {
           "path": "zkapi-clientd/internal/zkapi/testdata/browser-profiles/mainnet.json",

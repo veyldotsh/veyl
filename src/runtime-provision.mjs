@@ -19,7 +19,9 @@ export class RuntimeProvisioner {
     this.checkReady = checkReady || (async entry => {
       const provider = new ZkApiProvider({ base: entry.origin, key: entry.key });
       const report = await provider.diagnostics({ expectedNetwork: 'mainnet' });
-      if (!(await provider.models()).length) throw new Problem('The daemon model catalog is not ready.', 503);
+      // Wallet inspection and recovery must remain available when the public
+      // model catalog is down. Admission and dispatch still fetch live policy.
+      await provider.accountingIdentity();
       return report;
     });
     this.children = new Map(); this.operations = new Map(); this.leases = new Map(); this.lastUsed = new Map(); this.tail = Promise.resolve(); this.stopping = false;
