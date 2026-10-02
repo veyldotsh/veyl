@@ -10,9 +10,10 @@ import { LocalChain } from './chain.mjs';
 import { LocalMarkets } from './market.mjs';
 import { fundingFromEnv } from './funding.mjs';
 import { DemoProvider, ZkApiProvider } from './provider.mjs';
+import { activityQuery } from './api-queries.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-export function createApp(kit) {
+export function createApp(kit, { showcase = null, notifications = null, socialForProject = null, owner = 'local' } = {}) {
   const csrf = randomBytes(32).toString('hex');
   return createServer(async (req, res) => {
     const origin = `http://127.0.0.1:${req.socket.localPort}`;
@@ -22,12 +23,23 @@ export function createApp(kit) {
     try {
       if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin) || req.headers['sec-fetch-site'] === 'cross-site') throw new Problem('Local same-origin access required.', 403);
       const url = new URL(req.url, origin), parts = url.pathname.split('/').filter(Boolean);
+      if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'showcase' && parts.length === 3 && showcase) { if (url.search) throw new Problem('Public result pages do not accept query parameters.'); return json(200, showcase.public(parts[2])); }
+      if (req.method === 'GET' && url.pathname === '/api/notifications') { if (url.search) throw new Problem('Notifications do not accept query parameters.'); if (notifications) notifications.sync({ projects: kit.store.data.projects, jobs: kit.store.data.jobs, socialSnapshots: [] }); return json(200, notifications?.snapshot() || { notifications: [], unread: 0, capacityReached: false }); }
       if (req.method === 'GET' && url.pathname === '/api/session') return json(200, { mode: 'local', authenticated: true });
       if (req.method === 'GET' && url.pathname === '/api/state') return json(200, { ...kit.snapshot(), csrf });
       if (req.method === 'GET' && url.pathname === '/api/models') return json(200, await kit.provider.models());
       if (req.method === 'GET' && url.pathname === '/api/chain') return json(200, await kit.chain.status());
       if (req.method === 'GET' && url.pathname === '/api/funding') return json(200, kit.funding?.snapshot() || { credentialsConfigured: false, approvalEnabled: false, intents: [] });
       if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'research') { if (url.search) throw new Problem('Research endpoints do not accept query parameters.'); return json(200, kit.research.snapshot(parts[2])); }
+      if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && ['autonomy', 'activity', 'showcase', 'social'].includes(parts[3])) {
+        if (url.search && parts[3] !== 'activity') throw new Problem('This endpoint does not accept query parameters.');
+        kit.project(parts[2]);
+        if (parts[3] === 'autonomy') return json(200, kit.autonomy.snapshot(parts[2]));
+        if (parts[3] === 'activity') return json(200, kit.activity.snapshot(parts[2], activityQuery(url)));
+        if (parts[3] === 'showcase' && showcase) return json(200, showcase.owned(owner, parts[2]));
+        if (parts[3] === 'social' && socialForProject) return json(200, socialForProject(parts[2]).snapshot());
+        throw new Problem('This feature requires the connected hosted workspace.', 503);
+      }
       if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'balance') return json(200, { eth: await kit.chain.balance(kit.project(parts[2])) });
       if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'revenue') return json(200, await kit.chain.revenueStatus(kit.project(parts[2])));
       if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'market') return json(200, kit.markets ? await kit.markets.status(kit.project(parts[2])) : { configured: false });
@@ -43,6 +55,20 @@ export function createApp(kit) {
         for await (const chunk of req) { length += chunk.length; if (length > 40_000) throw new Problem('Request too large.', 413); chunks.push(chunk); }
         let body; try { body = JSON.parse(Buffer.concat(chunks)); } catch { throw new Problem('Invalid JSON.'); }
         if (!body || Array.isArray(body) || typeof body !== 'object') throw new Problem('Expected a JSON object.');
+        if (url.pathname === '/api/notifications/ack' && notifications) { if (url.search) throw new Problem('Notifications do not accept query parameters.'); return json(200, notifications.ack(body)); }
+        if (parts[1] === 'projects' && ['autonomy', 'showcase', 'social'].includes(parts[3])) {
+          if (url.search) throw new Problem('This endpoint does not accept query parameters.');
+          const project = kit.project(parts[2]); kit.store.assertHealthy();
+          if (parts[3] === 'autonomy' && parts.length === 4) return json(200, kit.autonomy.configure(project.id, body));
+          if (parts[3] === 'autonomy' && parts.length === 5 && parts[4] === 'run') return json(202, await kit.autonomy.run(project.id, body));
+          if (parts[3] === 'showcase' && showcase) {
+            if (Object.hasOwn(body, 'projectId')) throw new Problem('Project selection belongs in the route.');
+            if (parts.length === 4) return json(200, showcase.publish(owner, { ...body, projectId: project.id }));
+            if (parts.length === 5 && parts[4] === 'revoke') { if (Object.keys(body).length) throw new Problem('Revocation does not accept fields.'); return json(200, showcase.revoke(owner, { projectId: project.id })); }
+          }
+          if (parts[3] === 'social' && socialForProject && parts.length === 5 && parts[4] === 'posting-policy') return json(200, await socialForProject(project.id).configurePostingPolicy(body));
+          throw new Problem('Endpoint not found.', 404);
+        }
         if (parts[1] === 'funding' && parts.length === 3) {
           if (!kit.funding) throw new Problem('zkAPI funding is not configured.', 503);
           kit.store.assertHealthy();
@@ -95,6 +121,12 @@ export function createApp(kit) {
       assets['/theme.js'] = ['theme.js', 'text/javascript'];
       assets['/research-panel.js'] = ['research-panel.js', 'text/javascript'];
       assets['/research-panel.css'] = ['research-panel.css', 'text/css'];
+      for (const name of ['activity-panel', 'autonomy-panel', 'notification-panel', 'showcase-panel', 'public-agent']) {
+        assets[`/${name}.js`] = [`${name}.js`, 'text/javascript'];
+        assets[`/${name}.css`] = [`${name}.css`, 'text/css'];
+      }
+      if (/^\/agents\/[A-Za-z0-9_-]{16,128}$/.test(url.pathname)) assets[url.pathname] = ['public-agent.html', 'text/html'];
+      assets['/public-agent.html'] = ['public-agent.html', 'text/html'];
       assets['/ambient-fold.svg'] = ['ambient-fold.svg', 'image/svg+xml'];
       for (const file of ['site.html', 'index.html', 'docs.html', 'developers.html', 'brand.html', 'oauth-callback.html', 'market.html']) assets[`/${file}`] = [file, 'text/html'];
       assets['/developer-panel.css'] = ['developer-panel.css', 'text/css'];

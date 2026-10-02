@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Problem } from './agent.mjs';
 import { AGENT_TOOL_SCHEMAS } from './agent-tools.mjs';
+import { activityQuery } from './api-queries.mjs';
 
 const pick = (value, names) => Object.fromEntries(names.filter(name => value[name] !== undefined).map(name => [name, value[name]]));
 const requestKey = value => typeof value === 'string' && /^[a-zA-Z0-9-]{16,80}$/.test(value);
@@ -15,7 +16,7 @@ export async function developerRequest({ identity, method, url, body, registry, 
   if (!url.pathname.startsWith(base)) throw new Problem('Not found.', 404);
   const project = kit.project(identity.projectId);
   const query = [...url.searchParams.keys()];
-  if (query.length && !(method === 'GET' && route === 'jobs' && query.length === 1 && query[0] === 'requestKey' && requestKey(url.searchParams.get('requestKey')))) throw new Problem('Unsupported developer query.');
+  if (query.length && !(method === 'GET' && (route === 'activity' || route === 'jobs' && query.length === 1 && query[0] === 'requestKey' && requestKey(url.searchParams.get('requestKey'))))) throw new Problem('Unsupported developer query.');
   if (method === 'GET') {
     requireScope(identity, 'read');
     if (route === 'project') return { status: 200, body: { project: { ...pick(project, projectFields), capabilities: { apiVersion: 1, scopes: identity.scopes, inference: 'per-project-zkapi', jobsUseProjectTools: true, publishing: false, transactions: false, settlementReconciliation: kit.provider?.mode === 'zkapi' ? 'authenticated-native-call-receipts' : false, settlement: 'Exact ETH charges require matching native receipts. Unknown and legacy caps stay reserved; USD values use the original quote.' }, tools: AGENT_TOOL_SCHEMAS } } };
@@ -28,6 +29,8 @@ export async function developerRequest({ identity, method, url, body, registry, 
     }
     if (route === 'memory') return { status: 200, body: { memory: project.notes } };
     if (route === 'research') return { status: 200, body: kit.research.snapshot(project.id) };
+    if (route === 'autonomy') return { status: 200, body: kit.autonomy.snapshot(project.id) };
+    if (route === 'activity') return { status: 200, body: kit.activity.snapshot(project.id, activityQuery(url)) };
     if (route === 'drafts') { const drafts = registry.social(identity.address, project.id).snapshot().outbox; return { status: 200, body: { drafts: drafts.slice(-100), hasMore: drafts.length > 100 } }; }
   }
   if (method === 'POST' && route === 'jobs') {

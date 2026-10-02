@@ -18,6 +18,7 @@ async function sessionBootstrap() {
   return true;
 }
 function renderSignIn(message = '') {
+  if (typeof destroyFeaturePanels === 'function') destroyFeaturePanels();
   researchPanel?.destroy(); researchPanel = null; researchPanelGeneration++;
   socialPanel?.destroy(); socialPanel = null; socialPanelGeneration++; mainnetPanel?.destroy(); mainnetPanel = null; mainnetPanelGeneration++;
   runwayPanel?.destroy(); runwayPanel = null; runwayPanelGeneration++;
@@ -122,4 +123,15 @@ async function loadResearchPanel(p) {
     if (generation !== researchPanelGeneration || selected !== p.id || $('research-panel') !== element || !state) return;
     researchPanel = mountResearchPanel(element, { project: p, hosted: state.hosted === true, mode: state.mode, api, notify: toast });
   } catch (error) { if (generation === researchPanelGeneration && $('research-panel') === element) element.textContent = error.message; }
+}
+
+async function loadFeaturePanel(kind, project = null) {
+  const entries = { autonomy: ['/autonomy-panel.js', 'mountAutonomyPanel'], activity: ['/activity-panel.js', 'mountActivityPanel'], notification: ['/notification-panel.js', 'mountNotificationPanel'], showcase: ['/showcase-panel.js', 'mountShowcasePanel'] };
+  const entry = entries[kind], element = $(kind + '-panel'), generation = featurePanelGeneration;
+  if (!entry || !element || !state || (kind !== 'notification' && !project)) return;
+  try {
+    const module = await import(entry[0]);
+    if (generation !== featurePanelGeneration || $(kind + '-panel') !== element || !state || (project && selected !== project.id)) return;
+    featurePanels.set(kind, module[entry[1]](element, { project, api, hosted: state.hosted === true, notify: toast }));
+  } catch (error) { if (generation === featurePanelGeneration && $(kind + '-panel') === element) element.textContent = error.message; }
 }

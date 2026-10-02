@@ -8,3 +8,5 @@
 .social-panel .section-title p{overflow-wrap:anywhere}.social-panel .address{overflow-wrap:anywhere;font-size:10px}
 .social-panel input[type=password]{font-family:system-ui,sans-serif}
 @media(max-width:760px){.social-panel .two-col{gap:14px}.social-panel>.section-title{gap:12px}.social-panel .social-copy{max-height:210px}.social-outbox{margin-top:14px}}
+
+.social-posting-rules{margin:18px 0}.social-posting-rules>details>summary{font-size:13px;min-height:44px;display:flex;align-items:center}.social-posting-rules fieldset{border:0;padding:0;min-width:0}.social-posting-rules h3{font-size:13px}.social-posting-rules .hint{line-height:1.8}.social-policy-choice{display:flex;gap:10px;align-items:flex-start;min-height:44px;line-height:1.7}.social-policy-choice input{width:18px;height:18px;flex:none;margin:3px 0 0}.social-policy-choice span{min-width:0;overflow-wrap:anywhere}.social-posting-rules button{min-height:44px}

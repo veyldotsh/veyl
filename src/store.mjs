@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { Problem } from './agent.mjs';
 import { validateCall, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
 import { validateResearchState, validateResearchJob } from './research.mjs';
+import { validateAutonomyState, validateAutonomyJob } from './autonomy.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const amount = value => Number.isSafeInteger(value) && value >= 0;
@@ -28,6 +29,7 @@ function validate(data, mode) {
     if (p.accountingJournalId !== undefined && !/^[0-9a-f]{32}$/.test(p.accountingJournalId)) invalid();
     if (p.accountingRecoveryCursor !== undefined && !amount(p.accountingRecoveryCursor)) invalid();
     if (!validateResearchState(p)) invalid();
+    if (!validateAutonomyState(p)) invalid();
     projects.set(p.id, p); keys.add(p.requestKey); totals.set(p.id, 0); days.set(p.id, new Map());
   }
   keys.clear();
@@ -38,6 +40,7 @@ function validate(data, mode) {
         !amount(job.reservation) || !Array.isArray(job.steps) || ![1, 3].includes(job.steps.length)) invalid();
     if ((job.model !== undefined && (typeof job.model !== 'string' || !job.model || job.model.length > 256)) || (job.dispatch !== undefined && job.dispatch !== 'scheduler') || (job.dispatch === 'scheduler' && !job.model)) invalid();
     if (!validateResearchJob(job, data.jobs)) invalid();
+    if (!validateAutonomyJob(job, data.jobs)) invalid();
     if (job.storageReservationBytes !== undefined && (!amount(job.storageReservationBytes) || job.storageReservationBytes > TENANT_STATE_MAX_BYTES)) invalid();
     if (job.modelCap !== undefined && (mode !== 'zkapi' || !amount(job.modelCap) || job.modelCap < 1 || job.cap !== job.modelCap + ACCOUNTING_MARGIN_MICRO_USD)) invalid();
     const heldFor = call => {
@@ -54,7 +57,9 @@ function validate(data, mode) {
     for (const step of job.steps) {
       if (!object(step) || !['queued', 'running', 'completed', 'uncertain', 'not-dispatched'].includes(step.status)) invalid();
       const unattempted = step.status === 'not-dispatched';
-      if (unattempted && (mode !== 'zkapi' || ['callAccounting', 'additionalCalls', 'output', 'verification', 'simulatedCharge', 'toolActivity'].some(field => step[field] !== undefined))) invalid();
+      const evidenceOnly = step.sourceEvidenceOnly === true;
+      if (step.sourceEvidenceOnly !== undefined && (!evidenceOnly || !unattempted || job.autonomy?.phase !== 'research' || job.steps.length !== 1 || (step.toolActivity !== undefined && (!Array.isArray(step.toolActivity) || step.toolActivity.length > 3 || step.toolActivity.some(action => !object(action) || action.initiatedBy !== 'saved-plan' || action.name !== 'read_source' || !['completed', 'failed'].includes(action.status)))))) invalid();
+      if (unattempted && (mode !== 'zkapi' || ['callAccounting', 'additionalCalls', 'output', 'verification', 'simulatedCharge', ...(evidenceOnly ? [] : ['toolActivity'])].some(field => step[field] !== undefined))) invalid();
       const day = step.day ?? job.day, held = unattempted ? 0 : step.simulatedCharge ?? heldFor(step.callAccounting);
       if (step.callAccounting && (mode !== 'zkapi' || step.status === 'queued')) invalid();
       if (!date(day) || !amount(held) || held > job.cap || (step.simulatedCharge !== undefined && (mode !== 'demo' || step.status !== 'completed'))) invalid();

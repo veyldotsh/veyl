@@ -118,7 +118,7 @@ test('Research bookmark survives reload and global polling excludes its editor',
   const source = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'); vm.runInContext(source, context);
   await vm.runInContext(`sessionBootstrap = async () => true; state = { templates: {} }; refresh = async () => {}; api = async path => path === '/api/models' ? [] : {}; render = () => { observed = { view, selected, tab }; }; init();`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(context.observed)), { view: 'project', selected: 'agent-one', tab: 'research' });
-  assert.match(source, /\['connections', 'developer', 'research'\]\.includes\(tab\)/); assert.match(source, /form\.hasAttribute\('data-research-form'\)/);
+  assert.match(source, /\['connections', 'developer', 'research', 'runtime', 'deliverables'\]\.includes\(tab\)/); assert.match(source, /form\.hasAttribute\('data-research-form'\)/);
 });
 
 test('all pages start dark before scripts and old light preferences cannot add a theme switch', () => {

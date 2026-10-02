@@ -3,7 +3,7 @@
 Node 22 or later. Obtain a project-scoped token from the hosted workspace's Developer tab. Store it in your application's secret manager or environment, never client-side source or a public repository.
 
 ```sh
-npm install https://veyl.sh/downloads/veyl-sdk-0.2.0.tgz
+npm install https://veyl.sh/downloads/veyl-sdk-0.3.0.tgz
 ```
 
 ```js
@@ -15,9 +15,9 @@ const { jobs } = await veyl.jobs();
 // await veyl.submitJob({ requestKey: crypto.randomUUID(), prompt: 'Summarize the saved project context.' });
 ```
 
-Methods: `project`, `models`, `jobs`, `job(id)`, `submitJob`, `memory`, `saveMemory`, `drafts`, `prepareDraft`, `research`, `createWatchlist`, `updateWatchlist`, `checkWatchlist`. Responses retain the API's object wrappers. The SDK never retries mutations. On a network timeout or `VeylApiError.uncertain`, inspect the saved records using the original key before deciding what to do. Watchlist updates set fields without a key; read back their current values after an uncertain response.
+Methods: `project`, `models`, `jobs`, `job(id)`, `submitJob`, `memory`, `saveMemory`, `drafts`, `prepareDraft`, `research`, `activity`, `autonomy`, `createWatchlist`, `updateWatchlist`, `checkWatchlist`. Responses retain the API's object wrappers. The SDK never retries mutations. On a network timeout or `VeylApiError.uncertain`, inspect the saved records using the original key before deciding what to do. Watchlist updates set fields without a key; read back their current values after an uncertain response.
 
-Scopes are `read`, `jobs`, `memory`, `drafts`. They cannot fund a wallet, trade, change treasury policy, approve or publish a social post. Task submission can spend the project's existing inference allowance if funded and enabled. Research creation, updates and manual checks require `jobs`; `read` allows research history. An enabled watchlist authorizes recurring checks and potentially paid reports under existing project limits. Draft preparation requires an existing connected account; owner review and separately enabled publishing remain mandatory.
+Scopes are `read`, `jobs`, `memory`, `drafts`. They cannot fund a wallet, trade, change treasury policy, approve or publish a social post. Task submission can spend the project's existing inference allowance if funded and enabled. Research creation, updates and manual checks require `jobs`; `read` allows research history. An enabled watchlist authorizes recurring checks and potentially paid reports under existing project limits. Direct API drafts require an existing connection and owner review. Jobs can create agent-origin drafts eligible for an automatic posting rule already enabled by the owner. API tokens cannot enable or change those rules, configure autonomy or publish public result pages.
 
 ```js
 const { sourceHosts } = await veyl.research();
@@ -36,12 +36,14 @@ The first successful check records a baseline; unchanged checks use no inference
 
 Creation and check keys use the ordinary 16 to 80 character request-key format; UUIDs are recommended. Repeated creation with different original settings is rejected. A repeated retained check key returns its original record without another fetch or report; an expired check key is rejected rather than dispatched again. After uncertain outcomes, inspect the history rather than creating a new key. History is bounded, so archive records you need before older completed checks are removed. Snapshots include short result previews and are capped at 750 KB; `historyOmitted` counts older checks omitted from that response. Full report artifacts remain available through their linked job IDs.
 
+`activity({before, limit})` returns recorded actions, charge states and a `nextCursor`; use that cursor as `before` to read earlier events. `autonomy()` reads owner-configured policy, cycle history and saved follow-up memory. Both require `read` scope and cannot enable automation.
+
 Drafts accept up to 4,096 raw characters. The server uses X's official parser for its 280 weighted-character limit, including URL shortening, combined emoji and Unicode normalization. `madeWithAi` records AI assistance in Veyl's review; it does not request an X media label for a text-only post.
 
 Run the included local stdio MCP adapter with `VEYL_API_TOKEN` supplied through the host's protected environment:
 
 ```sh
-npx --package https://veyl.sh/downloads/veyl-sdk-0.2.0.tgz veyl-mcp
+npx --package https://veyl.sh/downloads/veyl-sdk-0.3.0.tgz veyl-mcp
 ```
 
 This is a local stdio adapter with bearer-token authorization, not a hosted OAuth MCP endpoint. See https://veyl.sh/developers for the API, token setup and supported tools. Live paid/provider acceptance was deliberately not performed.

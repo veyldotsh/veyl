@@ -9,6 +9,8 @@ const SCOPES = ['tweet.read', 'tweet.write', 'users.read', 'offline.access'];
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const secret = () => randomBytes(32).toString('base64url');
 const CHANNELS = new Set(['x', 'telegram']);
+const postingDefaults = () => ({ revision: 0, channels: Object.fromEntries([...CHANNELS].map(channel => [channel, { enabled: false, maxPerDay: 3, minIntervalMinutes: 60, connectionId: null, revision: 0, updatedAt: null }])) });
+const validPostingChannel = p => p && typeof p.enabled === 'boolean' && Number.isSafeInteger(p.maxPerDay) && p.maxPerDay >= 1 && p.maxPerDay <= 20 && Number.isSafeInteger(p.minIntervalMinutes) && p.minIntervalMinutes >= 5 && p.minIntervalMinutes <= 1440 && Number.isSafeInteger(p.revision) && p.revision >= 0 && (p.connectionId === null || typeof p.connectionId === 'string') && (p.updatedAt === null || Number.isSafeInteger(p.updatedAt));
 const equivalent = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const appCredential = (value, max, optional = false) => typeof value === 'string' && value.length <= max && (optional && value === '' || /^[\x21-\x7e]+$/.test(value));
 function clean(value, max = 512) { if (typeof value !== 'string' || !value || value.length > max || /[\u0000-\u001f]/.test(value)) throw new Problem('Provider returned invalid connection data.', 502); return value; }
@@ -24,19 +26,21 @@ function publicAccount(account) {
  * A generated draft never authorizes publication; publishing always requires
  * the human-reviewed exact digest. Unknown results never automatically retry. */
 export class SocialService {
-  #store; #owner; #projectId; #x; #fetch; #now; #publish; #busy = false; #diskHash;
-  constructor({ file, key, owner, projectId, x = {}, fetcher = fetch, now = Date.now, allowPublishing = false } = {}) {
+  #store; #owner; #projectId; #x; #fetch; #now; #publish; #canAutoPublish; #busy = false; #diskHash;
+  constructor({ file, key, owner, projectId, x = {}, fetcher = fetch, now = Date.now, allowPublishing = false, canAutoPublish = () => false } = {}) {
     this.#owner = getAddress(owner).toLowerCase();
     if (typeof projectId !== 'string' || !/^[a-f0-9-]{36}$/.test(projectId)) throw new Problem('Invalid social project identifier.');
-    this.#projectId = projectId; this.#x = { ...x }; this.#fetch = fetcher; this.#now = now; this.#publish = allowPublishing === true;
+    this.#projectId = projectId; this.#x = { ...x }; this.#fetch = fetcher; this.#now = now; this.#publish = allowPublishing === true; this.#canAutoPublish = canAutoPublish;
     if (this.#x.redirectUri) { const url = new URL(this.#x.redirectUri); if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Problem('X callback must be a fixed HTTPS URL without query parameters.'); }
     this.#store = new SealedState(file, key, `social:${this.#owner}:${projectId}`, { version: 1, owner: this.#owner, projectId, oauth: [], accounts: { x: null, telegram: null }, outbox: [] });
     this.#diskHash = createHash('sha256').update(readFileSync(file)).digest('hex');
     const s = this.#store.data;
     if (s.version !== 1 || s.owner !== this.#owner || s.projectId !== projectId || !Array.isArray(s.oauth) || !Array.isArray(s.outbox) || !s.accounts || s.oauth.length > 50 || s.outbox.length > 2000) throw new Problem('Invalid encrypted social state. Preserve it for recovery.', 503);
     if (s.xApp !== undefined && s.xApp !== null && (typeof s.xApp !== 'object' || Object.keys(s.xApp).some(key => !['clientId', 'clientSecret'].includes(key)) || !appCredential(s.xApp.clientId, 512) || !appCredential(s.xApp.clientSecret, 4096, true))) throw new Problem('Invalid encrypted X app settings. Preserve them for recovery.', 503);
+    if (s.postingPolicy !== undefined && (!Number.isSafeInteger(s.postingPolicy?.revision) || s.postingPolicy.revision < 0 || ![...CHANNELS].every(channel => validPostingChannel(s.postingPolicy.channels?.[channel])))) throw new Problem('Invalid encrypted posting policy.', 503);
     for (const entry of s.outbox) {
       if (!CHANNELS.has(entry.channel) || !['draft', 'sending', 'published', 'failed', 'unknown', 'cancelled'].includes(entry.status) || entry.approvalDigest !== digest(entry.preview)) throw new Problem('Invalid encrypted social outbox.', 503);
+      if (entry.automaticAuthorization && (entry.origin?.kind !== 'agent' || entry.automaticAuthorization.approvalDigest !== entry.approvalDigest || !Number.isSafeInteger(entry.automaticAuthorization.policyRevision) || !Number.isSafeInteger(entry.automaticAuthorization.at))) throw new Problem('Invalid encrypted automatic publication record.', 503);
       if (entry.status === 'sending') entry.status = 'unknown';
     }
     for (const entry of s.oauth) if (entry.status === 'exchanging') entry.status = 'unknown';
@@ -58,9 +62,26 @@ export class SocialService {
   #xApp() { return { ...(this.#store.data.xApp || this.#x), redirectUri: this.#x.redirectUri }; }
   #xBinding() { const app = this.#xApp(); return digest({ mode: this.#store.data.xApp ? 'custom' : 'platform', clientId: app.clientId || null, clientSecret: app.clientSecret || null, redirectUri: app.redirectUri || null }); }
   #publicXApp() { return { mode: this.#store.data.xApp ? 'custom' : 'platform', callbackUri: this.#x.redirectUri || null, platformAvailable: !!(this.#x.clientId && this.#x.redirectUri) }; }
-  snapshot() { const app = this.#xApp(); return { projectId: this.#projectId, xConfigured: !!(app.clientId && app.redirectUri), xApp: this.#publicXApp(), publishingEnabled: this.#publish,
+  snapshot() { const app = this.#xApp(); return { projectId: this.#projectId, xConfigured: !!(app.clientId && app.redirectUri), xApp: this.#publicXApp(), publishingEnabled: this.#publish, automaticPostingAvailable: this.#publish, postingPolicy: structuredClone(this.#store.data.postingPolicy || postingDefaults()),
     accounts: Object.fromEntries(Object.entries(this.#store.data.accounts).map(([channel, account]) => [channel, publicAccount(account)])), outbox: this.#store.data.outbox.map(item => this.#publicIntent(item)) }; }
-  #publicIntent(item) { return { id: item.id, channel: item.channel, status: item.status, preview: structuredClone(item.preview), approvalDigest: item.approvalDigest, createdAt: item.createdAt, expiresAt: item.expiresAt, ...(item.result ? { result: structuredClone(item.result) } : {}), ...(item.error ? { error: item.error } : {}) }; }
+  notificationSnapshot() {
+    return { projectId: this.#projectId,
+      accounts: Object.fromEntries(Object.entries(this.#store.data.accounts).map(([channel, account]) => [channel, account ? { connectionId: account.connectionId, connectedAt: account.connectedAt, status: account.status } : null])),
+      outbox: this.#store.data.outbox.filter(item => ['failed', 'unknown'].includes(item.status)).slice(-300).map(item => ({ id: item.id, channel: item.channel, status: item.status, createdAt: item.createdAt, ...(item.automaticAuthorization ? { attemptedAt: item.automaticAuthorization.at } : {}) })) };
+  }
+  #publicIntent(item) { const policy = this.#store.data.postingPolicy?.channels[item.channel]; const autoEligible = item.origin?.kind === 'agent' && policy?.enabled === true && item.postingRevision === policy.revision && policy.connectionId === item.preview.connectionId && item.status === 'draft' && item.expiresAt > this.#now(); return { id: item.id, channel: item.channel, status: item.status, preview: structuredClone(item.preview), approvalDigest: item.approvalDigest, createdAt: item.createdAt, expiresAt: item.expiresAt, origin: item.origin?.kind || 'owner', autoEligible, approvalMode: autoEligible ? 'automatic-policy' : 'owner-review', ...(item.automaticAuthorization ? { automatic: true, attemptedAt: item.automaticAuthorization.at } : {}), ...(item.result ? { result: structuredClone(item.result) } : {}), ...(item.error ? { error: item.error } : {}) }; }
+  configurePostingPolicy(input = {}) {
+    return this.#exclusive(() => {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['channel', 'enabled', 'maxPerDay', 'minIntervalMinutes'].includes(key)) || !CHANNELS.has(input.channel) || typeof input.enabled !== 'boolean' || !Number.isSafeInteger(input.maxPerDay) || input.maxPerDay < 1 || input.maxPerDay > 20 || !Number.isSafeInteger(input.minIntervalMinutes) || input.minIntervalMinutes < 5 || input.minIntervalMinutes > 1440) throw new Problem('Choose a channel, explicit posting opt-in, 1 to 20 attempts per day and a 5 to 1440 minute interval.');
+      const account = this.#store.data.accounts[input.channel];
+      if (input.enabled && account?.status !== 'connected') throw new Problem('Connect this channel before enabling automatic text posting.', 409);
+      const policy = this.#store.data.postingPolicy || postingDefaults(), old = policy.channels[input.channel];
+      const connectionId = account?.connectionId || null;
+      if (old.enabled === input.enabled && old.maxPerDay === input.maxPerDay && old.minIntervalMinutes === input.minIntervalMinutes && old.connectionId === connectionId) return { postingPolicy: structuredClone(policy) };
+      policy.revision++; policy.channels[input.channel] = { enabled: input.enabled, maxPerDay: input.maxPerDay, minIntervalMinutes: input.minIntervalMinutes, connectionId, revision: old.revision + 1, updatedAt: this.#now() };
+      this.#store.data.postingPolicy = policy; this.#save(); return { postingPolicy: structuredClone(policy) };
+    });
+  }
   async #request(url, { headers = {}, method = 'GET', body, form = false } = {}) {
     let response;
     try {
@@ -76,7 +97,9 @@ export class SocialService {
     const s = this.#store.data;
     for (const item of s.oauth) { if (item.status === 'pending') item.status = 'cancelled'; delete item.verifier; }
     for (const item of s.outbox) if (item.channel === 'x' && item.status === 'draft') item.status = 'cancelled';
+    this.#disablePosting('x');
   }
+  #disablePosting(channel) { const policy = this.#store.data.postingPolicy, current = policy?.channels[channel]; if (current?.enabled) { policy.revision++; Object.assign(current, { enabled: false, revision: current.revision + 1, updatedAt: this.#now() }); } }
   configureXApp(input = {}) {
     return this.#exclusive(() => {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['mode', 'clientId', 'clientSecret'].includes(key)) || !['custom', 'platform'].includes(input.mode)) throw new Problem('Choose your own X app or the Veyl app. The callback is fixed by Veyl.');
@@ -118,7 +141,7 @@ export class SocialService {
         const tokens = this.#tokens(await this.#request('https://api.x.com/2/oauth2/token', { method: 'POST', form: true, headers: this.#xHeaders(app), body: { grant_type: 'authorization_code', client_id: app.clientId, code, redirect_uri: app.redirectUri, code_verifier: intent.verifier } }));
         const me = await this.#request('https://api.x.com/2/users/me', { headers: { Authorization: 'Bearer ' + tokens.accessToken } });
         const account = { channel: 'x', connectionId: randomUUID(), id: id(me.data?.id), username: clean(me.data?.username, 50), connectedAt: this.#now(), status: 'connected', appBinding: intent.appBinding, ...tokens };
-        this.#store.data.accounts.x = account; intent.status = 'complete'; delete intent.verifier; this.#save(); return publicAccount(account);
+        this.#disablePosting('x'); this.#store.data.accounts.x = account; intent.status = 'complete'; delete intent.verifier; this.#save(); return publicAccount(account);
       } catch (error) { intent.status = 'unknown'; delete intent.verifier; if (this.#store.healthy) this.#save(); throw error; }
     });
   }
@@ -151,19 +174,25 @@ export class SocialService {
         if (membership.user?.id !== me.id || !['creator', 'administrator'].includes(membership.status) || (chat.type === 'channel' && membership.status !== 'creator' && membership.can_post_messages !== true)) throw new Problem('Give this bot administrator and posting permission in the selected chat first.', 409);
       }
       const account = { channel: 'telegram', connectionId: randomUUID(), id: id(me.id), username: clean(me.username || String(me.id), 100), token, chatId: target, chatType: chat.type, chatTitle: clean(chat.title || chat.first_name || target, 256), connectedAt: this.#now(), status: 'connected' };
-      this.#store.data.accounts.telegram = account; this.#save(); return publicAccount(account);
+      this.#disablePosting('telegram'); this.#store.data.accounts.telegram = account; this.#save(); return publicAccount(account);
     });
   }
   disconnect({ channel } = {}) {
     return this.#exclusive(() => {
       if (!CHANNELS.has(channel)) throw new Problem('Unknown social channel.');
       this.#store.data.accounts[channel] = null;
+      this.#disablePosting(channel);
       if (channel === 'x') this.#invalidateX();
       for (const item of this.#store.data.outbox) if (item.channel === channel && item.status === 'draft') item.status = 'cancelled';
       this.#save(); return { disconnected: true, providerRevocation: 'Revoke app access in the provider settings if you also want to invalidate its issued credentials.' };
     });
   }
-  draft({ channel, text, idempotencyKey, madeWithAi = true } = {}) {
+  draft(input = {}) { return this.#draft(input, null); }
+  draftFromAgent(input, provenance) {
+    if (!provenance || typeof provenance !== 'object' || Object.keys(provenance).some(key => !['jobId', 'callId'].includes(key)) || !['jobId', 'callId'].every(key => typeof provenance[key] === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(provenance[key]))) return Promise.reject(new Problem('Agent drafts require a trusted job and tool-call identity.'));
+    return this.#draft(input, { kind: 'agent', jobId: provenance.jobId, callId: provenance.callId });
+  }
+  #draft({ channel, text, idempotencyKey, madeWithAi = true } = {}, origin) {
     return this.#exclusive(() => {
       if (!CHANNELS.has(channel) || typeof text !== 'string' || !text.trim() || /\u0000/.test(text) || typeof madeWithAi !== 'boolean' || typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) throw new Problem('Choose a connected channel, message and unique draft key.');
       if (text.length > 4096) throw new Problem('Draft text must be at most 4096 characters.');
@@ -175,7 +204,8 @@ export class SocialService {
       const old = this.#store.data.outbox.find(i => i.key === idempotencyKey);
       if (old) { if (old.approvalDigest !== digest(preview)) throw new Problem('Draft key belongs to different content or account.', 409); return this.#publicIntent(old); }
       if (this.#store.data.outbox.length >= 2000) throw new Problem('Social outbox capacity reached; archive it before continuing.', 409);
-      const item = { id: randomUUID(), key: idempotencyKey, channel, status: 'draft', preview, approvalDigest: digest(preview), createdAt: this.#now(), expiresAt: this.#now() + 86_400_000 };
+      const policy = this.#store.data.postingPolicy?.channels[channel];
+      const item = { id: randomUUID(), key: idempotencyKey, channel, status: 'draft', preview, approvalDigest: digest(preview), createdAt: this.#now(), expiresAt: this.#now() + 86_400_000, origin: origin || { kind: 'owner' }, ...(origin && policy?.enabled && policy.connectionId === account.connectionId ? { postingRevision: policy.revision } : {}) };
       this.#store.data.outbox.push(item); this.#save(); return this.#publicIntent(item);
     });
   }
@@ -184,10 +214,33 @@ export class SocialService {
       if (!this.#publish) throw new Problem('Publishing is disabled by server configuration.', 403);
       const item = this.#store.data.outbox.find(i => i.id === intentId);
       if (!item || !equivalent(item.approvalDigest, approvalDigest)) throw new Problem('Approval does not match the exact displayed social draft.', 409);
+      return this.#publishItem(item, false);
+    });
+  }
+  #automaticAllowed(item) {
+    const policy = this.#store.data.postingPolicy?.channels[item.channel], account = this.#store.data.accounts[item.channel], now = this.#now();
+    if (!this.#publish || this.#canAutoPublish() !== true || !policy?.enabled || item.origin?.kind !== 'agent' || item.postingRevision !== policy.revision || policy.connectionId !== item.preview.connectionId || account?.connectionId !== policy.connectionId || account.status !== 'connected' || item.status !== 'draft' || item.expiresAt <= now) return false;
+    const attempts = this.#store.data.outbox.filter(other => other.channel === item.channel && other.automaticAuthorization);
+    const day = new Date(now).toISOString().slice(0, 10);
+    if (attempts.filter(other => new Date(other.automaticAuthorization.at).toISOString().slice(0, 10) === day).length >= policy.maxPerDay) return false;
+    return !attempts.some(other => now - other.automaticAuthorization.at < policy.minIntervalMinutes * 60000);
+  }
+  autoPublishDue() {
+    return this.#exclusive(async () => {
+      const item = this.#store.data.outbox.find(item => this.#automaticAllowed(item));
+      if (!item) return { dispatched: false, published: false };
+      return { dispatched: true, published: true, intent: await this.#publishItem(item, true) };
+    });
+  }
+  async #publishItem(item, automatic) {
       if (item.status !== 'draft') return this.#publicIntent(item); // No uncertain replay.
       const account = this.#store.data.accounts[item.channel];
       if (!account || account.connectionId !== item.preview.connectionId || item.expiresAt <= this.#now()) throw new Problem('Account or draft changed. Review a fresh draft.', 409);
       let accessToken; if (item.channel === 'x') accessToken = await this.#xToken(account);
+      if (automatic) {
+        if (!this.#automaticAllowed(item)) throw new Problem('Automatic posting policy or project state changed before dispatch.', 409);
+        item.automaticAuthorization = { at: this.#now(), policyRevision: item.postingRevision, connectionId: account.connectionId, approvalDigest: item.approvalDigest };
+      }
       item.status = 'sending'; this.#save();
       try {
         if (item.channel === 'x') {
@@ -205,7 +258,6 @@ export class SocialService {
         item.status = error.definiteFailure ? 'failed' : 'unknown'; item.error = error.definiteFailure ? 'Provider rejected this publication. Prepare and approve a new draft to retry.' : 'Publication may have succeeded. Check the provider before preparing any replacement.';
         if (this.#store.healthy) this.#save(); throw new Problem(item.error, 502);
       }
-    });
   }
   cancel({ intentId } = {}) { return this.#exclusive(() => { const item = this.#store.data.outbox.find(i => i.id === intentId); if (!item || item.status !== 'draft') throw new Problem('Only an unsent draft can be cancelled.', 409); item.status = 'cancelled'; this.#save(); return this.#publicIntent(item); }); }
 }

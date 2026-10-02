@@ -1,0 +1,29 @@
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+export function showcaseLink(value, slug) {
+  try { const url = new URL(value); if (url.origin === 'https://veyl.sh' && !url.username && !url.password && !url.search && !url.hash && /^[A-Za-z0-9_-]{24}$/.test(slug) && url.pathname === `/agents/${slug}`) return url.href; } catch {}
+  return null;
+}
+export function mountShowcasePanel(element, { project, api, notify = () => {} } = {}) {
+  let live = true, busy = false, loading = true, saved = null, error = '';
+  const base = `/api/projects/${encodeURIComponent(project.id)}/showcase`;
+  function render() {
+    if (!live) return;
+    const link = saved && showcaseLink(saved.url, saved.slug);
+    element.innerHTML = `<section class="panel showcase-panel"><div class="section-title"><div><h2>Public agent page</h2><p>Share a chosen result. Keep the rest of this workspace private.</p></div>${link ? `<a class="text-link" href="${esc(link)}" target="_blank" rel="noreferrer">View public page ↗</a>` : '<span class="status">Not shared</span>'}</div>${error ? `<p class="error" role="alert">${esc(error)}</p>` : ''}${loading ? '<p class="hint">Reading sharing settings…</p>' : `<details><summary>${saved ? 'Edit shared results' : 'Choose what to share'}</summary><form data-showcase-form><fieldset ${busy ? 'disabled' : ''}><label>Public page title<input name="title" required maxlength="100" value="${esc(saved?.title || project.name)}"></label><label>Public description<textarea name="description" maxlength="600" required>${esc(saved?.description || '')}</textarea></label><p class="hint">Select one to five completed results. Inspect the full text before sharing; it can include facts or quotations from your private task.</p><div class="showcase-choices">${project.artifacts.slice().reverse().map((artifact, index) => `<article><label class="showcase-choice"><input type="checkbox" name="artifactId" value="${esc(artifact.id)}" ${saved?.artifactIds.includes(artifact.id) ? 'checked' : ''}><span>${esc(artifact.title || `Result ${index + 1}`)}<small>${artifact.mode === 'demo' ? 'Simulated output' : 'Model output'}</small></span></label><details><summary>Inspect exact result</summary><pre>${esc(artifact.content)}</pre></details></article>`).join('') || '<p class="hint">Complete a task to select a result.</p>'}</div><label class="showcase-choice"><input name="approve" type="checkbox" required><span>Publish this title, description and the exact selected results on an unauthenticated public page. Removing the page later cannot remove copies other people saved.</span></label><p class="hint">Private prompts, memory and credentials are not added separately. The selected result text itself is published exactly as saved.</p><button class="button" type="submit" ${project.artifacts.length ? '' : 'disabled'}>${saved ? 'Update public page' : 'Publish selected results'}</button></fieldset></form></details>${saved ? `<details><summary>Remove public page</summary><p class="hint">This disables its public URL. It does not delete your saved deliverables or copies held by others.</p><button class="button secondary" data-showcase="revoke" ${busy ? 'disabled' : ''}>Remove public page</button></details>` : ''}<button class="text-link" data-showcase="refresh" ${busy ? 'disabled' : ''}>Refresh sharing status</button>`}</section>`;
+  }
+  async function refresh() {
+    try { const result = await api(base); if (!live) return; if (!result || !Object.hasOwn(result, 'showcase') || (result.showcase && (!Array.isArray(result.showcase.artifactIds) || !showcaseLink(result.showcase.url, result.showcase.slug)))) throw Error('Public sharing status could not be verified.'); saved = result.showcase; error = ''; }
+    catch (failure) { if (live) error = failure.message || 'Sharing status is unavailable.'; }
+    finally { loading = false; if (live) render(); }
+  }
+  async function action(work) { if (!live || busy) return; busy = true; render(); try { await work(); if (live) await refresh(); } catch (failure) { if (live) error = `${failure.message || 'Sharing outcome could not be confirmed.'} Refresh before another action. No automatic retry was sent.`; } finally { busy = false; if (live) render(); } }
+  function click(event) { const button = event.target.closest('[data-showcase]'); if (!button || !element.contains(button) || button.disabled || busy) return; if (button.dataset.showcase === 'refresh') return refresh(); if (button.dataset.showcase === 'revoke') return action(async () => { await api(base + '/revoke', {}); notify('Public page removed. Saved private deliverables remain.'); }); }
+  async function submit(event) {
+    if (!event.target.matches('[data-showcase-form]')) return; event.preventDefault(); if (!live || busy) return;
+    const fields = new FormData(event.target), artifactIds = fields.getAll('artifactId');
+    if (fields.get('approve') !== 'on' || artifactIds.length < 1 || artifactIds.length > 5 || new Set(artifactIds).size !== artifactIds.length || artifactIds.some(id => !project.artifacts.some(artifact => artifact.id === id))) { error = 'Select one to five saved results and explicitly approve public sharing.'; render(); return; }
+    return action(async () => { await api(base, { title: String(fields.get('title') || '').trim(), description: String(fields.get('description') || '').trim(), artifactIds }); notify('Selected results published to the public agent page.'); });
+  }
+  render(); element.addEventListener('click', click); element.addEventListener('submit', submit); const ready = refresh();
+  return { ready, refresh, destroy() { live = false; element.removeEventListener('click', click); element.removeEventListener('submit', submit); element.innerHTML = ''; saved = null; } };
+}

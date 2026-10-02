@@ -10,6 +10,10 @@
   },
   "rewrites": [
     {
+      "source": "/agents/:slug",
+      "destination": "/public-agent.html"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api/gateway?veyl_path=:path*"
     },

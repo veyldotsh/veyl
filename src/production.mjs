@@ -29,6 +29,8 @@ import { loadConversionOperator } from './conversion-operator.mjs';
 import { DeveloperKeys } from './developer-auth.mjs';
 import { developerRequest } from './developer-api.mjs';
 import { configuredPlatformMarket } from './platform-market.mjs';
+import { ExperienceNotifications, ShowcaseDirectory } from './experience.mjs';
+import { activityQuery } from './api-queries.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 class UnconfiguredProvider {
@@ -41,6 +43,8 @@ export class TenantRegistry {
     this.directory = resolve(directory); this.key = key; this.mainnet = mainnet; this.maxTenants = maxTenants; this.now = now; this.kits = new Map(); this.runtimes = new Map(); this.tickRunning = false;
     this.runtimeFactory = runtimeFactory; this.socialSettings = socialSettings; this.socials = new Map(); mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     this.developerKeys = new DeveloperKeys({ file: resolve(this.directory, 'developer-keys.sealed.json'), key, now: () => +this.now() });
+    this.notifications = new Map(); this.socialCursors = new Map();
+    this.showcase = new ShowcaseDirectory({ file: resolve(this.directory, 'showcase.sealed.json'), key, origin: socialSettings.publicOrigin || 'https://veyl.sh', now: () => +this.now(), projectForOwner: (owner, id) => this.get(owner).project(id) });
     this.feeKeeper = feeKeeper; this.lastFeeTick = 0;
     this.treasuryOperator = treasuryOperator; this.lastRunwayTick = 0;
     this.conversionKeeper = conversionKeeper; this.lastConversionTick = 0;
@@ -315,9 +319,37 @@ export class TenantRegistry {
     const id = `${getAddress(owner).toLowerCase()}:${projectId}`;
     if (!this.socials.has(id)) {
       if (this.socials.size >= 8) { const idle = [...this.socials].find(([, service]) => service.canEvict?.()); if (!idle) throw new Problem('Social connection workers are busy.', 503); this.socials.delete(idle[0]); }
-      this.socials.set(id, new SocialService({ file: resolve(this.directory, owner.toLowerCase(), projectId, 'social.sealed.json'), key: this.key, owner, projectId, ...this.socialSettings }));
+      this.socials.set(id, new SocialService({ file: resolve(this.directory, owner.toLowerCase(), projectId, 'social.sealed.json'), key: this.key, owner, projectId, ...this.socialSettings, canAutoPublish: () => this.get(owner).project(projectId).status === 'active' }));
     }
     return this.socials.get(id);
+  }
+  notificationService(owner) {
+    owner = getAddress(owner).toLowerCase();
+    this.get(owner);
+    if (!this.notifications.has(owner)) {
+      if (this.notifications.size >= this.maxLoadedTenants) this.notifications.delete(this.notifications.keys().next().value);
+      this.notifications.set(owner, new ExperienceNotifications({ file: resolve(this.directory, owner, 'notifications.sealed.json'), key: this.key, owner, now: () => +this.now() }));
+    }
+    return this.notifications.get(owner);
+  }
+  syncNotifications(owner, kit) {
+    const prefix = getAddress(owner).toLowerCase() + ':';
+    const socialSnapshots = [...this.socials].filter(([id]) => id.startsWith(prefix)).map(([, service]) => service.notificationSnapshot());
+    const service = this.notificationService(owner);
+    service.sync({ projects: kit.store.data.projects, jobs: kit.store.data.jobs, socialSnapshots });
+    return service;
+  }
+  async tickExperience(owner, kit) {
+    const projects = kit.store.data.projects.filter(p => existsSync(resolve(this.directory, owner.toLowerCase(), p.id, 'social.sealed.json')));
+    try {
+      if (projects.length) {
+        const cursor = this.socialCursors.get(owner) || 0;
+        this.socialCursors.set(owner, (cursor + 1) % projects.length);
+        const project = projects[cursor % projects.length], service = this.social(owner, project.id);
+        if (project.status === 'active') await service.autoPublishDue();
+      }
+    } catch { /* Failed or uncertain posts stay in their durable outbox; never retry here. */ }
+    finally { this.syncNotifications(owner, kit); }
   }
   runtime(owner, projectId) {
     const id = `${getAddress(owner).toLowerCase()}:${projectId}`;
@@ -359,14 +391,14 @@ export class TenantRegistry {
     const provider = new UnconfiguredProvider();
     const chain = { status: async () => ({ available: true, chainId: 1, mode: 'wallet', transactions: 'user-signed', account: getAddress(owner) }) };
     const kit = new Kit({ store, provider, chain, now: this.now, providerForProject: p => this.executionProvider(owner, p.id), providerCatalogForProject: p => this.catalog(owner, p.id),
-      fundingForProject: async p => (await this.ready(owner, p.id)).funding, beforeAdmission: p => this.inferenceAdmission(owner, p.id), agentTools: new AgentTools({ client: this.mainnet?.client }), prepareSocialDraft: (project, input) => this.social(owner, project.id).draft(input) });
+      fundingForProject: async p => (await this.ready(owner, p.id)).funding, beforeAdmission: p => this.inferenceAdmission(owner, p.id), agentTools: new AgentTools({ client: this.mainnet?.client }), prepareSocialDraft: (project, input, provenance) => this.social(owner, project.id).draftFromAgent(input, provenance) });
     kit.queue = { assertCapacity: () => { this.resources.assertCapacity(); return this.scheduler.assertCapacity(owner); }, enqueue: input => { const entry = this.scheduler.enqueue({ owner, ...input }); setImmediate(() => this.scheduler.tick().catch(() => {})); return entry; } };
     // Hooks are explicit rather than selecting a daemon from untrusted request data.
     kit.providerForProject = p => this.executionProvider(owner, p.id);
     this.kits.set(owner, kit); this.owners.add(owner); return kit;
   }
   pin(owner) { const kit = this.get(owner), key = owner.toLowerCase(); this.pins.set(key, (this.pins.get(key) || 0) + 1); let released = false; return { kit, release: () => { if (!released) { released = true; this.pins.set(key, this.pins.get(key) - 1); } } }; }
-  health() { return { healthy: this.configuration.healthy && this.maintenance.healthy && this.scheduler.healthy && this.developerKeys.store.healthy && this.feeKeeper?.journal?.healthy !== false && this.treasuryOperator?.journal?.healthy !== false && this.conversionKeeper?.journal?.healthy !== false && [...this.kits.values()].every(k => k.store.healthy), tenants: this.kits.size, executing: [...this.kits.values()].filter(k => k.running).length }; }
+  health() { return { healthy: this.configuration.healthy && this.maintenance.healthy && this.scheduler.healthy && this.developerKeys.store.healthy && this.showcase.healthy && [...this.notifications.values()].every(n => n.healthy) && this.feeKeeper?.journal?.healthy !== false && this.treasuryOperator?.journal?.healthy !== false && this.conversionKeeper?.journal?.healthy !== false && [...this.kits.values()].every(k => k.store.healthy), tenants: this.kits.size, executing: [...this.kits.values()].filter(k => k.running).length }; }
   async tick() {
     if (this.tickRunning) return; this.tickRunning = true;
     try {
@@ -379,6 +411,7 @@ export class TenantRegistry {
         await this.tickConversions(owners.find(owner => this.kits.get(owner) === kit), kit);
         await this.tickRunways(owners.find(owner => this.kits.get(owner) === kit), kit);
         await this.tickAccounting(owners.find(owner => this.kits.get(owner) === kit), kit);
+        await this.tickExperience(owners.find(owner => this.kits.get(owner) === kit), kit);
         if (!kit.store.data.workerHeartbeat || +this.now() - +new Date(kit.store.data.workerHeartbeat.checkedAt) >= 30_000) {
           const checkedAt = this.now().toISOString(); kit.store.data.workerHeartbeat = { checkedAt, status: 'online' };
           for (const project of kit.store.data.projects) project.runtimeHeartbeat = { checkedAt, worker: 'online', daemon: this.provisioner.children.has(project.id) ? 'running' : 'stopped', executing: kit.running && kit.store.data.jobs.some(j => j.projectId === project.id && j.status === 'running') };
@@ -430,6 +463,11 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
         rateLimit('public-market:' + client);
         return json(200, await platformMarket.publicSnapshot(transactionsEnabled));
       }
+      if (parts[0] === 'api' && parts[1] === 'showcase' && parts.length === 3 && req.method === 'GET') {
+        if (url.search) throw new Problem('Public result pages do not accept query parameters.');
+        rateLimit('public-showcase:' + client);
+        return json(200, registry.showcase.public(parts[2]));
+      }
       if (path === '/api/session' && req.method === 'GET') {
         const session = auth.session(cookie);
         return json(200, { mode: 'production', authenticated: !!session, ...(session ? { address: session.address, csrf: session.csrf } : {}) });
@@ -443,6 +481,14 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
       if (path === '/api/auth/logout' && req.method === 'POST') { auth.logout(cookie, req.headers['x-agent-csrf']); res.setHeader('Set-Cookie', sessionCookie('', 0)); return json(200, { loggedOut: true }); }
       rateLimit(session.address);
       tenantLease = registry.pin(session.address); const kit = tenantLease.kit, checkpoint = () => kit.store.save();
+      if (path === '/api/notifications' && req.method === 'GET') {
+        if (url.search) throw new Problem('Notifications do not accept query parameters.');
+        return json(200, registry.syncNotifications(session.address, kit).snapshot());
+      }
+      if (path === '/api/notifications/ack' && req.method === 'POST') {
+        if (url.search) throw new Problem('Notifications do not accept query parameters.');
+        return json(200, registry.syncNotifications(session.address, kit).ack(body));
+      }
       if (parts[0] === 'api' && parts[1] === 'platform-market') {
         if (url.search || parts.length !== 3) throw new Problem('Platform market endpoint not found.', 404);
         if (req.method === 'GET' && parts[2] === 'status') return json(200, await platformMarket.status(kit, session.address));
@@ -475,6 +521,30 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
       }
       if (parts[0] === 'api' && parts[1] === 'projects' && parts.length >= 4) {
         const project = kit.project(parts[2]);
+        if (parts[3] === 'autonomy') {
+          if (url.search) throw new Problem('Autonomy endpoints do not accept query parameters.');
+          if (parts.length === 4 && req.method === 'GET') return json(200, kit.autonomy.snapshot(project.id));
+          if (req.method === 'POST') {
+            registry.resources.assertCapacity();
+            if (parts.length === 4) return json(200, kit.autonomy.configure(project.id, body));
+            if (parts.length === 5 && parts[4] === 'run') return json(202, await kit.autonomy.run(project.id, body));
+          }
+          throw new Problem('Autonomy endpoint not found.', 404);
+        }
+        if (parts[3] === 'activity' && parts.length === 4 && req.method === 'GET') {
+          return json(200, kit.activity.snapshot(project.id, activityQuery(url)));
+        }
+        if (parts[3] === 'showcase') {
+          if (url.search) throw new Problem('Showcase endpoints do not accept query parameters.');
+          if (parts.length === 4 && req.method === 'GET') return json(200, registry.showcase.owned(session.address, project.id));
+          if (req.method === 'POST') {
+            if (Object.hasOwn(body, 'projectId')) throw new Problem('Project selection belongs in the route.');
+            kit.store.assertHealthy();
+            if (parts.length === 4) { registry.resources.assertCapacity(); return json(200, registry.showcase.publish(session.address, { ...body, projectId: project.id })); }
+            if (parts.length === 5 && parts[4] === 'revoke') { if (Object.keys(body).length) throw new Problem('Revocation does not accept fields.'); return json(200, registry.showcase.revoke(session.address, { projectId: project.id })); }
+          }
+          throw new Problem('Showcase endpoint not found.', 404);
+        }
         if (parts[3] === 'research' || parts[3] === 'watches') {
           if (url.search) throw new Problem('Research endpoints do not accept query parameters.');
           if (parts[3] === 'research' && parts.length === 4 && req.method === 'GET') return json(200, kit.research.snapshot(project.id));
@@ -521,7 +591,7 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
           if (req.method === 'GET' && parts.length === 4) return json(200, social.snapshot());
           if (req.method === 'POST' && parts.length === 5) {
             kit.store.assertHealthy();
-            const method = { 'x-app': 'configureXApp', 'x-begin': 'beginX', 'x-complete': 'completeX', telegram: 'connectTelegram', disconnect: 'disconnect', draft: 'draft', publish: 'publish', cancel: 'cancel' }[parts[4]];
+            const method = { 'x-app': 'configureXApp', 'x-begin': 'beginX', 'x-complete': 'completeX', telegram: 'connectTelegram', disconnect: 'disconnect', draft: 'draft', publish: 'publish', cancel: 'cancel', 'posting-policy': 'configurePostingPolicy' }[parts[4]];
             if (!method) throw new Problem('Not found.', 404);
             if (parts[4] === 'draft') registry.resources.assertCapacity();
             return json(200, await social[method](body));

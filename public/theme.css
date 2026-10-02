@@ -19,7 +19,7 @@ html[data-theme="dark"] button.veyl-motion-control:disabled{color:#aabca1}
 html[data-theme="dark"] .veyl-motion-control::after{background:#d8e7c9;color:#182a21}
 
 /* Public pages: the folds remain green, with readable copy on every layer. */
-html[data-theme="dark"] :is(.landing,.documentation,.identity,.market-page) :is(p,li,small,dt,.section-number,.nav-links,.text-link,.token-address,.docs-eyebrow,.docs-topic-number,.docs-nav>a,.docs-nav>span,.docs-end>span,.site-footer>div,.site-footer>div>span){color:var(--muted)}
+html[data-theme="dark"] :is(.landing,.documentation,.identity,.market-page,.public-agent-page) :is(p,li,small,dt,.section-number,.nav-links,.text-link,.token-address,.docs-eyebrow,.docs-topic-number,.docs-nav>a,.docs-nav>span,.docs-end>span,.site-footer>div,.site-footer>div>span){color:var(--muted)}
 html[data-theme="dark"] :is(.site-nav,.site-footer){background:rgba(17,32,25,.86);border-color:var(--line)}
 html[data-theme="dark"] :is(.site-nav,.site-footer) .logo-word,
 html[data-theme="dark"] body>main>img[src="/veyl-wordmark.svg"]{content:url('/veyl-wordmark-light.svg')}

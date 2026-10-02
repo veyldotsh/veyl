@@ -27,6 +27,16 @@ test('agent tool catalog is strict and has no signing, generic HTTP, shell, or p
   schemas[0].function.name = 'arbitrary'; assert.equal(f.tools.schemas()[0].function.name, 'read_source');
 });
 
+test('agent draft provenance comes only from trusted runtime identity and auto policy remains a later decision', async () => {
+  const f = fixture(); let received;
+  f.context.prepareSocialDraft = async (input, provenance) => { received = { input, provenance }; return { id: 'draft', status: 'draft', autoEligible: true, approvalDigest: 'PRIVATE_APPROVAL' }; };
+  const result = await f.tools.execute({ name: 'prepare_social_draft', arguments: { channel: 'x', text: 'A supported update.' } }, f.context);
+  assert.deepEqual(received.provenance, { jobId: f.context.jobId, callId: f.context.callId });
+  assert.equal(received.input.jobId, undefined); assert.equal(result.requiresHumanReview, false); assert.equal(result.approvalMode, 'automatic-policy'); assert.equal(result.published, false);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_APPROVAL/);
+  await assert.rejects(f.tools.execute({ name: 'prepare_social_draft', arguments: { channel: 'x', text: 'Spoof', jobId: 'other' } }, f.context), /schema/);
+});
+
 test('read_source enforces reviewed HTTPS domains before executing even an injected source reader', async () => {
   const f = fixture();
   for (const url of ['http://ethereum.org', 'https://127.0.0.1/', 'https://ethereum.org.evil.example/', 'https://user:password@ethereum.org/', 'https://ethereum.org:444/']) await assert.rejects(f.tools.execute({ name: 'read_source', arguments: { url } }, f.context));

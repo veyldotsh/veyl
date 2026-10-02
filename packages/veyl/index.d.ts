@@ -10,6 +10,9 @@ export interface WatchlistSettings { name: string; brief: string; sources: strin
 export interface ResearchWatchlist extends WatchlistSettings { id: string; requestKey: string; [key: string]: unknown; }
 export interface ResearchCheck { id: string; requestKey: string; status: string; [key: string]: unknown; }
 export interface ResearchSnapshot { watchlists: ResearchWatchlist[]; checks: ResearchCheck[]; limits: Record<string, number | number[]>; sourceHosts: string[]; historyOmitted: number; }
+export interface ActivityEvent { id: string; at: string; type: string; status: string; title: string; jobId?: string; cycleId?: string; source?: string; details?: unknown; charge?: Record<string, unknown>; }
+export interface ActivitySnapshot { events: ActivityEvent[]; nextCursor: string | null; omitted: number; }
+export interface AutonomySnapshot { policy: Record<string, unknown>; cycles: Array<Record<string, unknown>>; memory: unknown; limits: Record<string, unknown>; sourceHosts: string[]; }
 export class VeylApiError extends Error { status: number; code: string; requestId?: string; uncertain: boolean; }
 export class VeylClient {
   constructor(options: VeylOptions);
@@ -20,6 +23,9 @@ export class VeylClient {
   submitJob(input: { requestKey: string; prompt: string }): Promise<{ job: Job }>;
   memory(): Promise<{ memory: Memory[] }>;
   research(): Promise<ResearchSnapshot>;
+  /** Read owner-configured autonomy. Cannot change permissions or start a cycle. */
+  autonomy(): Promise<AutonomySnapshot>;
+  activity(input?: { before?: string; limit?: number }): Promise<ActivitySnapshot>;
   /** Explicit enabled=true authorizes scheduled checks and budgeted changed-source reports. */
   createWatchlist(input: WatchlistSettings & { requestKey: string }): Promise<{ watchlist: ResearchWatchlist }>;
   updateWatchlist(id: string, input: Partial<WatchlistSettings>): Promise<{ watchlist: ResearchWatchlist }>;

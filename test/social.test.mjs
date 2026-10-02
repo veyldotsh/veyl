@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SocialService } from '../src/social.mjs';
@@ -38,6 +38,82 @@ function fixture(t, options = {}) {
 async function connectX(f) { const auth = await f.service.beginX(); return f.service.completeX({ state: auth.state, code: 'offline-authorization-code' }); }
 const draft = (service, channel = 'x') => service.draft({ channel, text: 'A reviewed Veyl post.', idempotencyKey: 'fixture-draft-1', madeWithAi: true });
 const approve = item => ({ intentId: item.id, approvalDigest: item.approvalDigest });
+const autoRule = (extra = {}) => ({ channel: 'x', enabled: true, maxPerDay: 2, minIntervalMinutes: 5, ...extra });
+const agentDraft = (service, key, channel = 'x') => service.draftFromAgent({ channel, text: 'An agent result selected for this channel.', idempotencyKey: key }, { jobId: 'job-123', callId: key });
+
+test('automatic posting is opt-in, new agent drafts only, bounded and durably bound to exact content', async t => {
+  const f = fixture(t, { canAutoPublish: () => true }); await connectX(f);
+  assert.equal(f.service.snapshot().postingPolicy.channels.x.enabled, false);
+  await agentDraft(f.service, 'agent-before-optin');
+  assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  await f.service.configurePostingPolicy(autoRule());
+  await f.service.draft({ channel: 'x', text: 'An owner draft is never automatic.', idempotencyKey: 'manual-forged-origin', origin: { kind: 'agent' }, postingRevision: 1 });
+  assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  const first = await agentDraft(f.service, 'agent-after-optin-1');
+  f.intercept(call => { if (call.url.pathname === '/2/tweets') { const saved = f.state().outbox.find(item => item.id === first.id); assert.equal(saved.status, 'sending'); assert.equal(saved.automaticAuthorization.approvalDigest, first.approvalDigest); assert.equal(saved.automaticAuthorization.connectionId, first.preview.connectionId); assert.deepEqual(call.body, { text: first.preview.text }); } });
+  assert.equal((await f.service.autoPublishDue()).intent.status, 'published'); f.intercept(() => {});
+  await agentDraft(f.service, 'agent-after-optin-2'); assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  f.setClock(TIME + 5 * 60000); assert.equal((await f.service.autoPublishDue()).dispatched, true);
+  await agentDraft(f.service, 'agent-after-optin-3'); f.setClock(TIME + 10 * 60000); assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  assert.equal(f.calls.filter(call => call.url.pathname === '/2/tweets').length, 2);
+  assert.equal(f.service.snapshot().outbox.find(item => item.id === first.id).automatic, true);
+});
+
+test('automatic policy revision, project pause and expiry stop dispatch; connection changes disable opt-in', async t => {
+  let active = true; const f = fixture(t, { canAutoPublish: () => active }); await connectX(f); await f.service.configurePostingPolicy(autoRule());
+  await agentDraft(f.service, 'pending-revision'); await f.service.configurePostingPolicy(autoRule({ maxPerDay: 3 }));
+  assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  await agentDraft(f.service, 'pending-refresh-pause'); f.setClock(TIME + 7_200_000);
+  f.intercept(call => { if (call.body?.grant_type === 'refresh_token') active = false; });
+  await assert.rejects(f.service.autoPublishDue(), /changed before dispatch/);
+  assert.equal(f.calls.some(call => call.url.pathname === '/2/tweets'), false);
+  assert.equal(f.state().outbox.some(item => item.automaticAuthorization), false);
+  active = true; f.setClock(TIME + 86_400_001); assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  f.intercept(() => {}); await connectX(f); assert.equal(f.service.snapshot().postingPolicy.channels.x.enabled, false);
+  await f.service.configurePostingPolicy(autoRule()); await f.service.disconnect({ channel: 'x' }); assert.equal(f.service.snapshot().postingPolicy.channels.x.enabled, false);
+});
+
+test('unknown automatic publication survives restart, consumes its attempt limit and never replays', async t => {
+  const f = fixture(t, { canAutoPublish: () => true }); await connectX(f); await f.service.configurePostingPolicy(autoRule({ maxPerDay: 1 }));
+  await agentDraft(f.service, 'unknown-automatic'); f.intercept(call => { if (call.url.pathname === '/2/tweets') throw Error('Lost response after possible publication'); });
+  await assert.rejects(f.service.autoPublishDue(), /may have succeeded/);
+  f.service = f.restart(); f.intercept(() => {}); await agentDraft(f.service, 'second-automatic'); f.setClock(TIME + 10 * 60000);
+  assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  assert.equal(f.calls.filter(call => call.url.pathname === '/2/tweets').length, 1);
+  assert.equal(f.service.snapshot().outbox[0].status, 'unknown');
+  const notifications = f.service.notificationSnapshot(); assert.equal(notifications.outbox.length, 1); assert.equal(notifications.outbox[0].status, 'unknown');
+  assert.equal(notifications.outbox[0].preview, undefined); assert.equal(notifications.accounts.x.username, undefined);
+  for (const value of [ACCESS, REFRESH, 'An agent result selected']) assert.equal(JSON.stringify(notifications).includes(value), false);
+});
+
+test('automatic publishing requires server enablement and trusted project readiness', async t => {
+  for (const options of [{ allowPublishing: false, canAutoPublish: () => true }, {}]) {
+    const f = fixture(t, options); await connectX(f); await f.service.configurePostingPolicy(autoRule()); await agentDraft(f.service, 'server-gated-agent');
+    assert.equal((await f.service.autoPublishDue()).dispatched, false); assert.equal(f.calls.some(call => call.url.pathname === '/2/tweets'), false);
+  }
+  const f = fixture(t); await assert.rejects(f.service.configurePostingPolicy(autoRule()), /Connect/);
+  for (const input of [autoRule({ maxPerDay: 21 }), autoRule({ minIntervalMinutes: 0 }), { ...autoRule(), connectionId: 'forged' }]) await assert.rejects(f.service.configurePostingPolicy(input));
+  await assert.rejects(f.service.draftFromAgent({}, { jobId: 'valid', callId: 'valid', owner: 'forged' }));
+});
+
+test('Telegram automatic publication is bound to the opted-in chat and does not inherit another channel rule', async t => {
+  const f = fixture(t, { canAutoPublish: () => true }); await connectX(f); await f.service.configurePostingPolicy(autoRule());
+  await f.service.connectTelegram({ token: TOKEN, chatId: CHAT }); await agentDraft(f.service, 'telegram-before-policy', 'telegram');
+  assert.equal((await f.service.autoPublishDue()).dispatched, false);
+  await f.service.configurePostingPolicy(autoRule({ channel: 'telegram', maxPerDay: 1 }));
+  const item = await agentDraft(f.service, 'telegram-after-policy', 'telegram'); assert.equal(item.autoEligible, true); assert.equal(item.approvalMode, 'automatic-policy');
+  const sent = await f.service.autoPublishDue(); assert.equal(sent.intent.result.chatId, CHAT);
+  assert.deepEqual(f.calls.at(-1).body, { chat_id: CHAT, text: item.preview.text, link_preview_options: { is_disabled: true } });
+  await f.service.connectTelegram({ token: TOKEN, chatId: CHAT }); assert.equal(f.service.snapshot().postingPolicy.channels.telegram.enabled, false);
+});
+
+test('automatic posting never sends when exact-content authorization cannot be persisted', async t => {
+  const f = fixture(t, { canAutoPublish: () => true }); await connectX(f); await f.service.configurePostingPolicy(autoRule()); await agentDraft(f.service, 'cannot-persist-automatic');
+  writeFileSync(f.file + '.write-lock', 'offline lock');
+  await assert.rejects(f.service.autoPublishDue(), /persist/);
+  assert.equal(f.calls.some(call => call.url.pathname === '/2/tweets'), false);
+  await assert.rejects(f.service.autoPublishDue(), /persistence/);
+});
 
 test('X PKCE binds wallet/project, exact callback, state expiry and single-use token exchange', async t => {
   const f = fixture(t), begun = await f.service.beginX(), url = new URL(begun.authorizationUrl);

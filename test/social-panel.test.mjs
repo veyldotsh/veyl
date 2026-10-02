@@ -28,6 +28,19 @@ test('local Connections panel makes no account API requests or credential form',
   assert.equal(requested, false); assert.match(element.innerHTML, /local demo does not accept credentials/); assert.doesNotMatch(element.innerHTML, /type="password"|data-social="publish"/); panel.destroy(); assert.equal(element.handlers.size, 0);
 });
 
+test('posting rules are explicit per destination and cannot override server availability', async () => {
+  const snapshot = fixture({ publishingEnabled: false });
+  snapshot.automaticPostingAvailable = false;
+  snapshot.postingPolicy = { revision: 0, channels: Object.fromEntries(['x','telegram'].map(channel => [channel, { enabled:false,maxPerDay:2,minIntervalMinutes:60,connectionId:null }])) };
+  const element = new Element(), writes = [];
+  const panel = mountSocialPanel(element, { project, hosted:true, api:async(path,body)=>{if(body)writes.push({path,body});return snapshot;}, now:()=>now }); await panel.ready;
+  assert.match(element.innerHTML,/Automatic publication is disabled by the server/); assert.doesNotMatch(element.innerHTML,/name="enabled" type="checkbox" checked/);
+  const policy = form('posting-policy',{maxPerDay:'3',minIntervalMinutes:'30'}); policy.dataset.channel='x'; policy.elements.enabled={checked:true};
+  element.fire('submit',policy);await settled(panel);
+  assert.deepEqual(writes,[{path:`/api/projects/${project.id}/social/posting-policy`,body:{channel:'x',enabled:true,maxPerDay:3,minIntervalMinutes:30}}]);
+  policy.dataset.channel='telegram';element.fire('submit',policy);await settled(panel);assert.equal(writes.length,1);assert.match(element.innerHTML,/Connect the destination/);panel.destroy();
+});
+
 test('server-supplied text is escaped and no result-provided URL can become a link', async () => {
   const snapshot = fixture(), item = snapshot.outbox[0]; item.result = { id: '123', url: 'javascript:attack()' }; const element = new Element();
   const panel = mountSocialPanel(element, { project, hosted: true, api: async () => snapshot, now: () => now }); await panel.ready;

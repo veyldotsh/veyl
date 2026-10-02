@@ -53,6 +53,13 @@ export class VeylClient {
   submitJob({ requestKey, prompt } = {}) { key(requestKey); text(prompt, 8000, 'prompt'); return this.#request('jobs', { requestKey, prompt }); }
   memory() { return this.#request('memory'); }
   research() { return this.#request('research'); }
+  autonomy() { return this.#request('autonomy'); }
+  activity({ before, limit } = {}) {
+    if (before !== undefined && (typeof before !== 'string' || !/^[A-Za-z0-9_-]{1,400}$/.test(before))) throw new TypeError('Invalid activity cursor.');
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)) throw new TypeError('Activity limit must be between one and 100.');
+    const query = new URLSearchParams(); if (before !== undefined) query.set('before', before); if (limit !== undefined) query.set('limit', String(limit));
+    return this.#request('activity' + (query.size ? '?' + query : ''));
+  }
   createWatchlist(input) { watchInput(input, true); return this.#request('research/watchlists', input); }
   updateWatchlist(id, input) { watchId(id); watchInput(input, false); return this.#request(`research/watchlists/${id}`, input); }
   checkWatchlist(id, input) { watchId(id); fields(input, ['requestKey'], ['requestKey']); key(input.requestKey); return this.#request(`research/watchlists/${id}/checks`, input); }

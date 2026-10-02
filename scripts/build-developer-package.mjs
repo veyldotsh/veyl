@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 export function buildDeveloperPackage(destination = resolve('dist/downloads')) {
   const directory = fileURLToPath(new URL('../packages/veyl/', import.meta.url));
   const manifest = JSON.parse(readFileSync(resolve(directory, 'package.json'), 'utf8'));
-  if (manifest.name !== '@veyl/sdk' || manifest.version !== '0.2.0' || !Array.isArray(manifest.files) || manifest.files.length > 20) throw Error('Review the developer package identity and file list before release.');
+  if (manifest.name !== '@veyl/sdk' || manifest.version !== '0.3.0' || !Array.isArray(manifest.files) || manifest.files.length > 20) throw Error('Review the developer package identity and file list before release.');
   const expected = new Set(['package.json', ...manifest.files]);
   for (const name of expected) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(name) || name.split('/').some(p => ['..', 'node_modules', 'data', 'output', '.git'].includes(p)) || /(^|\/)\.env/.test(name)) throw Error('Invalid developer package file.');
@@ -21,14 +21,14 @@ export function buildDeveloperPackage(destination = resolve('dist/downloads')) {
   const result = spawnSync(npmCli ? process.execPath : 'npm', npmCli ? [npmCli, ...npmArgs] : npmArgs, { cwd: directory, encoding: 'utf8', windowsHide: true, timeout: 60000, maxBuffer: 2_000_000 });
   if (result.status !== 0) throw Error('Developer package build failed; no package was approved for release.');
   const packed = JSON.parse(result.stdout);
-  if (packed.length !== 1 || packed[0].filename !== 'veyl-sdk-0.2.0.tgz' || !Array.isArray(packed[0].files)) throw Error('Unexpected package output.');
+  if (packed.length !== 1 || packed[0].filename !== 'veyl-sdk-0.3.0.tgz' || !Array.isArray(packed[0].files)) throw Error('Unexpected package output.');
   const actual = new Set(packed[0].files.map(file => file.path));
   if (actual.size !== expected.size || [...actual].some(name => !expected.has(name))) throw Error('Package contents differ from the reviewed file list.');
   const bytes = readFileSync(resolve(destination, packed[0].filename));
   const integrity = 'sha512-' + createHash('sha512').update(bytes).digest('base64');
   if (integrity !== packed[0].integrity) throw Error('Developer package integrity differs from npm output.');
   const report = { name: manifest.name, version: manifest.version, file: packed[0].filename, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), integrity, files: [...actual].sort() };
-  writeFileSync(resolve(destination, 'veyl-sdk-0.2.0.json'), JSON.stringify(report, null, 2) + '\n');
+  writeFileSync(resolve(destination, 'veyl-sdk-0.3.0.json'), JSON.stringify(report, null, 2) + '\n');
   return report;
 }
 

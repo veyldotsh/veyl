@@ -32,10 +32,10 @@ async function protocol(t, client) {
   return { send, call: (name, args = {}) => send('tools/call', { name, arguments: args }) };
 }
 
-test('MCP negotiates the protocol and exposes thirteen scoped tools with honest annotations', async t => {
+test('MCP negotiates the protocol and exposes fifteen scoped tools with honest annotations', async t => {
   const p = await protocol(t, {}), reply = await p.send('tools/list', {});
   const tools = reply.result.tools;
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['veyl_project', 'veyl_models', 'veyl_jobs', 'veyl_job', 'veyl_memory', 'veyl_drafts', 'veyl_submit_job', 'veyl_save_memory', 'veyl_prepare_draft', 'veyl_research', 'veyl_create_watchlist', 'veyl_update_watchlist', 'veyl_check_watchlist'].sort());
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['veyl_activity', 'veyl_autonomy', 'veyl_project', 'veyl_models', 'veyl_jobs', 'veyl_job', 'veyl_memory', 'veyl_drafts', 'veyl_submit_job', 'veyl_save_memory', 'veyl_prepare_draft', 'veyl_research', 'veyl_create_watchlist', 'veyl_update_watchlist', 'veyl_check_watchlist'].sort());
   for (const tool of tools) {
     assert.equal(tool.inputSchema.additionalProperties, false);
     assert.equal(tool.annotations.openWorldHint, true);
@@ -56,7 +56,7 @@ test('MCP tool calls route through the SDK with exact project-bound requests and
     ['veyl_project', {}, 'project'], ['veyl_models', {}, 'models'],
     ['veyl_jobs', { requestKey }, `jobs?requestKey=${requestKey}`], ['veyl_job', { jobId: 'job_123' }, 'jobs/job_123'],
     ['veyl_memory', {}, 'memory'], ['veyl_drafts', {}, 'drafts'],
-    ['veyl_research', {}, 'research'],
+    ['veyl_research', {}, 'research'], ['veyl_activity', {}, 'activity'], ['veyl_autonomy', {}, 'autonomy'],
     ['veyl_create_watchlist', { requestKey, name: 'Changes', brief: 'Summarize changes.', sources: ['https://ethereum.org/en/'], enabled: false, cadenceMinutes: 60 }, 'research/watchlists'],
     ['veyl_update_watchlist', { watchId: requestKey, enabled: false }, `research/watchlists/${requestKey}`],
     ['veyl_check_watchlist', { watchId: requestKey, requestKey }, `research/watchlists/${requestKey}/checks`],
@@ -149,7 +149,7 @@ test('MCP executable uses clean stdio and exits after input closes, without cont
   });
   assert.equal((await send('initialize', initialize)).result.serverInfo.name, 'veyl');
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-  assert.equal((await send('tools/list', {})).result.tools.length, 13);
+  assert.equal((await send('tools/list', {})).result.tools.length, 15);
   child.stdin.end();
   assert.deepEqual(await closed, { code: 0, signal: null });
   assert.equal(stderr, '');
