@@ -61,6 +61,11 @@ case "$1" in
 esac`);
   mock('systemd-run', `
 printf '%s\n' "$*" >>"$VEYL_TEST_BASE/prepare-log"
+if [[ "$*" == *verify-native-install.mjs* ]]; then
+  current=$(/usr/bin/realpath "$VEYL_TEST_BASE/current")
+  [[ "$*" == *"$current/scripts/verify-native-install.mjs"* ]] || { printf 'Installed native build must use its own release verifier.\n' >&2; exit 2; }
+  [[ "$VEYL_TEST_FAULT" != old-native || "$current" != "$VEYL_TEST_BASE/releases/old" ]] || exit 1
+fi
 if [[ "$*" == *verify-accounting-runtime.mjs* && "$VEYL_TEST_FAULT" == candidate ]]; then exit 1; fi
 if [[ "$*" == *check-vps-runtime.mjs* ]]; then
   [[ "$*" == *"/usr/bin/env NODE_OPTIONS="* && "$*" == *"VEYL_ZKAPI_CLIENTD=$VEYL_TEST_BASE/native-releases/reviewed/zkapi-clientd-control"* && "$*" == *"VEYL_ZKAPI_WALLETD=$VEYL_TEST_BASE/native-releases/reviewed/zkapi-walletd"* && "$*" == *"VEYL_ZKAPI_MANIFEST=$VEYL_TEST_BASE/native-releases/reviewed/runtime-manifest.json"* ]] || exit 2
@@ -75,7 +80,7 @@ fi`);
   const inspect = run('printf "client=%s\\nwallet=%s\\nmanifest=%s\\ncurrent=%s\\nenv=%s\\noriginal=%s\\nstate=%s\\nservice=%s\\n" "$(cat "$1/bin/zkapi-clientd-control")" "$(readlink "$1/vendor/runtime/bin/zkapi-walletd")" "$(cat "$1/bin/runtime-manifest.json")" "$(realpath "$1/current")" "$(cat "$1/runtime.env")" "$(cat "$1/vendor/runtime/lib/original/zkapi-walletd")" "$(cat "$1/worker-data/state")" "$(cat "$1/service-state")"', [base]);
   assert.equal(inspect.status, 0, inspect.stderr);
   const state = Object.fromEntries(inspect.stdout.trim().split('\n').map(line => { const split = line.indexOf('='); return [line.slice(0, split), line.slice(split + 1)]; }));
-  return { result, state, base, candidate, old, release, log: existsSync(join(root, 'veyl/control-log')) ? readFileSync(join(root, 'veyl/control-log'), 'utf8') : '' };
+  return { result, state, base, candidate, old, release, log: existsSync(join(root, 'veyl/control-log')) ? readFileSync(join(root, 'veyl/control-log'), 'utf8') : '', prepareLog: existsSync(join(root, 'veyl/prepare-log')) ? readFileSync(join(root, 'veyl/prepare-log'), 'utf8') : '' };
 }
 function preserved(f) {
   assert.equal(f.state.client, '#!old-client'); assert.equal(f.state.manifest, 'old-manifest');
@@ -87,8 +92,13 @@ test('accounting upgrade validates and switches four paths while preserving stat
   assert.equal(f.state.client, 'new-client'); assert.equal(f.state.manifest, 'new-manifest'); assert.equal(f.state.wallet, f.candidate + '/zkapi-walletd'); assert.equal(f.state.current, f.release);
   assert.equal(f.state.env, 'private-unchanged'); assert.equal(f.state.original, '#!old-wallet'); assert.equal(f.state.state, 'data');
   assert.ok(f.log.split('\n').filter(line => /^(stop|start) /.test(line)).every(line => /^(stop|start) veyl\.service$/.test(line)));
+  const checks = f.prepareLog.split('\n').filter(line => /verify-(native-install|accounting-runtime)\.mjs/.test(line));
+  assert.equal(checks.length, 3);
+  assert.ok(checks[0].includes(f.old + '/scripts/verify-native-install.mjs'));
+  assert.ok(checks[1].includes(f.release + '/scripts/verify-accounting-runtime.mjs ' + f.candidate));
+  assert.ok(checks[2].includes(f.release + '/scripts/verify-native-install.mjs'));
 });
-for (const fault of ['candidate', 'smoke', 'resource-limit']) test('accounting upgrade rejects ' + fault + ' before stopping the worker', { skip: !enabled }, () => {
+for (const fault of ['old-native', 'candidate', 'smoke', 'resource-limit']) test('accounting upgrade rejects ' + fault + ' before stopping the worker', { skip: !enabled }, () => {
   const f = fixture(fault); assert.notEqual(f.result.status, 0); preserved(f); assert.doesNotMatch(f.log, /^stop /m);
 });
 for (const fault of ['manifest-write', 'new-health']) test('accounting upgrade restores all four paths after ' + fault, { skip: !enabled }, () => {

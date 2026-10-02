@@ -7,6 +7,7 @@ import { accountingIdentity, applySettlement, ACCOUNTING_MARGIN_MICRO_USD } from
 import { ResearchDesk } from './research.mjs';
 import { Autonomy, autonomySourceAllowed } from './autonomy.mjs';
 import { Activity } from './activity.mjs';
+import { runtimeFailureCode } from './runtime-diagnostics.mjs';
 
 const templates = {
   research: { name: 'Research desk', role: 'Researcher', description: 'Turn supplied sources into a sourced brief and questions worth investigating.' },
@@ -268,6 +269,8 @@ export class Kit {
       this.event(p, 'delivered', `${job.steps.length} stage(s) completed. Deliverable saved to memory.`); this.store.save({ consume: job }); job.storageReservationBytes = 0; this.store.save();
     } catch (error) {
       job.finishedAt = this.now().toISOString();
+      const diagnostic = runtimeFailureCode(error?.runtimeFailureCode);
+      if (diagnostic) job.failureCode = diagnostic;
       job.status = 'interrupted'; job.error = error instanceof SourceEvidenceStopped ? error.message : error instanceof LocalReadinessStopped ? 'Local funding readiness blocked the next call. Unattempted stages were released; earlier calls retain their verified or unresolved charges.' : error?.code === 'TENANT_STORAGE_FULL' ? 'Tenant storage is full. No further model call was sent. Existing budget reservations are retained.' : `${completed} stage(s) completed. Unresolved reservations retained. No automatic retry; inspect daemon recovery for live requests.`;
       job.storageReservationBytes = 0;
       for (const step of job.steps) if (step.status === 'running') step.status = 'uncertain';

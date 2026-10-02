@@ -37,6 +37,27 @@ index 0000000..f040f4b
 +	a, ok := ctx.Value(contextKey{}).(Admission)
 +	return a, ok
 +}
+diff --git a/zkapi-clientd/internal/diagnostics/codes.go b/zkapi-clientd/internal/diagnostics/codes.go
+new file mode 100644
+index 0000000..82458ba
+--- /dev/null
++++ b/zkapi-clientd/internal/diagnostics/codes.go
+@@ -0,0 +1,15 @@
++// Package diagnostics contains informational failure codes only. A code never
++// authorizes a retry or releases a reservation; signed settlement does that.
++package diagnostics
++
++func Allowed(code string) bool {
++	switch code {
++	case "lease_response_mismatch", "lease_inference_origin_mismatch",
++		"verifier_origin_mismatch", "verifier_transport_failed", "verifier_response_invalid",
++		"verifier_response_rejected", "verifier_binding_mismatch", "verifier_station_banned",
++		"verifier_key_expired", "key_verification_failed", "lease_reservation_failed",
++		"wallet_error", "companion_unavailable", "companion_request_failed", "invalid_companion_response":
++		return true
++	}
++	return false
++}
 diff --git a/zkapi-clientd/internal/server/accounting_test.go b/zkapi-clientd/internal/server/accounting_test.go
 new file mode 100644
 index 0000000..b361068
@@ -139,11 +160,57 @@ index 0000000..b361068
 +		})
 +	}
 +}
+diff --git a/zkapi-clientd/internal/server/diagnostics_test.go b/zkapi-clientd/internal/server/diagnostics_test.go
+new file mode 100644
+index 0000000..8f8cccd
+--- /dev/null
++++ b/zkapi-clientd/internal/server/diagnostics_test.go
+@@ -0,0 +1,40 @@
++package server
++
++import (
++	"context"
++	"encoding/json"
++	"io"
++	"net/http"
++	"strings"
++	"testing"
++)
++
++type diagnosticFixtureError struct{ code string }
++
++func (e diagnosticFixtureError) Error() string          { return "secret provider key and prompt" }
++func (e diagnosticFixtureError) DiagnosticCode() string { return e.code }
++
++func TestOnlyAllowlistedRuntimeDiagnosticCrossesHTTPBoundary(t *testing.T) {
++	for _, code := range []string{"verifier_response_rejected", "lease_reservation_failed", "secret-invalid-code"} {
++		backend := &fakeBackend{complete: func(context.Context, json.RawMessage) (*http.Response, error) {
++			return nil, diagnosticFixtureError{code}
++		}}
++		server := apiServer(t, backend)
++		response, err := http.DefaultClient.Do(request(t, server.URL, `{"model":"x","messages":[{"role":"user"}]}`))
++		if err != nil {
++			t.Fatal(err)
++		}
++		body, _ := io.ReadAll(response.Body)
++		response.Body.Close()
++		want := code
++		if strings.HasPrefix(code, "secret") {
++			want = "anonymous_access_failed"
++		}
++		if response.StatusCode != 502 || !strings.Contains(string(body), want) || strings.Contains(string(body), "secret") || strings.Contains(string(body), "prompt") {
++			t.Fatalf("unsafe diagnostic response %s", body)
++		}
++		if backend.calls.Load() != 1 {
++			t.Fatal("diagnostic caused retry")
++		}
++	}
++}
 diff --git a/zkapi-clientd/internal/server/server.go b/zkapi-clientd/internal/server/server.go
-index 3c2117b..0b41ae4 100644
+index 3c2117b..f1f310c 100644
 --- a/zkapi-clientd/internal/server/server.go
 +++ b/zkapi-clientd/internal/server/server.go
-@@ -12,8 +12,11 @@ import (
+@@ -12,8 +12,12 @@ import (
  	"mime"
  	"net"
  	"net/http"
@@ -152,10 +219,11 @@ index 3c2117b..0b41ae4 100644
  	"time"
 +
 +	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
++	"github.com/ethereum/zkapi/zkapi-clientd/internal/diagnostics"
  )
  
  type Backend interface {
-@@ -77,7 +80,8 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+@@ -77,7 +81,8 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
  		writeJSON(w, 200, []byte(`{"status":"ok"}`))
  		return
  	}
@@ -165,7 +233,7 @@ index 3c2117b..0b41ae4 100644
  	if keylessInference {
  		if !localInferenceRequest(r) {
  			writeError(w, 403, "local_connection_required", "Connect to this API through localhost.")
-@@ -117,6 +121,39 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+@@ -117,6 +122,39 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
  		return
  	}
  	switch {
@@ -205,7 +273,7 @@ index 3c2117b..0b41ae4 100644
  	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
  		ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
  		defer cancel()
-@@ -226,6 +263,16 @@ func (a *API) complete(w http.ResponseWriter, r *http.Request) {
+@@ -226,6 +264,16 @@ func (a *API) complete(w http.ResponseWriter, r *http.Request) {
  	}
  	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
  	defer cancel()
@@ -222,6 +290,18 @@ index 3c2117b..0b41ae4 100644
  	// Bound total uploads and queued requests while allowing ordinary UI bursts
  	// to wait. Read the body before waiting so net/http can notice a disconnected
  	// client and cancel its queued request without spending anonymous access.
+@@ -276,6 +324,11 @@ func (a *API) complete(w http.ResponseWriter, r *http.Request) {
+ 			writeError(w, safe.Status, safe.Code, safe.Message)
+ 			return
+ 		}
++		var diagnostic interface{ DiagnosticCode() string }
++		if errors.As(err, &diagnostic) && diagnostics.Allowed(diagnostic.DiagnosticCode()) {
++			writeError(w, 502, diagnostic.DiagnosticCode(), "The local runtime could not finish this call. Reservations remain held until signed settlement; no automatic retry.")
++			return
++		}
+ 		writeError(w, 502, "anonymous_access_failed", "Anonymous access could not be prepared. Check funding with zkapi-clientd config; relay and verifier availability are also required.")
+ 		return
+ 	}
 diff --git a/zkapi-clientd/internal/zkapi/call_accounting.go b/zkapi-clientd/internal/zkapi/call_accounting.go
 new file mode 100644
 index 0000000..2289259
@@ -737,27 +817,87 @@ index 0000000..4dbafa2
 +	}
 +}
 diff --git a/zkapi-clientd/internal/zkapi/client.go b/zkapi-clientd/internal/zkapi/client.go
-index b386f1c..c2d5655 100644
+index b386f1c..94ac2a3 100644
 --- a/zkapi-clientd/internal/zkapi/client.go
 +++ b/zkapi-clientd/internal/zkapi/client.go
-@@ -18,6 +18,7 @@ import (
+@@ -18,7 +18,9 @@ import (
  	"sync"
  	"time"
  
 +	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
  	"github.com/ethereum/zkapi/zkapi-clientd/internal/activity"
++	"github.com/ethereum/zkapi/zkapi-clientd/internal/diagnostics"
  )
  
-@@ -62,6 +63,8 @@ type Error struct {
+ const (
+@@ -62,6 +64,51 @@ type Error struct {
  	Code   string
  }
  
 +func (e *Error) HTTPStatus() int { return e.Status }
 +
++func (e *Error) DiagnosticCode() string {
++	if diagnostics.Allowed(e.Code) {
++		return e.Code
++	}
++	return ""
++}
++
++// Exact messages are from the pinned, authenticated local companion. They are
++// classified in memory; no free-form message crosses the API boundary.
++func companionDiagnostic(code, message string) string {
++	if code == "key_verification_failed" {
++		switch message {
++		case "OA key verification failed: lease identity, native quote, or spending cap mismatch":
++			return "lease_response_mismatch"
++		case "OA key verification failed: lease inference origin does not match the client's trusted OpenRouter origin":
++			return "lease_inference_origin_mismatch"
++		case "OA key verification failed: lease verifier does not match trusted verifier":
++			return "verifier_origin_mismatch"
++		case "OA key verification failed: verifier transport failed":
++			return "verifier_transport_failed"
++		case "OA key verification failed: invalid verifier response", "OA key verification failed: oversized verifier response":
++			return "verifier_response_invalid"
++		case "OA key verification failed: verifier did not approve this station and key", "OA key verification failed: verifier did not approve a trusted station key":
++			return "verifier_response_rejected"
++		case "OA key verification failed: verifier response binding mismatch":
++			return "verifier_binding_mismatch"
++		case "OA key verification failed: station is banned":
++			return "verifier_station_banned"
++		case "OA key verification failed: key is empty or expired", "OA key verification failed: key expired during verification", "OA key verification failed: key is expired":
++			return "verifier_key_expired"
++		}
++		return "key_verification_failed"
++	}
++	if code == "wallet_error" {
++		switch message {
++		case "wallet error: cannot persist lease reservation", "wallet error: cannot sync lease reservation", "wallet error: cannot sync lease reservation parent", "wallet error: cannot sync lease reservation directory":
++			return "lease_reservation_failed"
++		}
++		return "wallet_error"
++	}
++	return ""
++}
++
  func (e *Error) Error() string {
  	if e.Code == "testnet_password_required" {
  		return "Sepolia password is missing or incorrect; stop the daemon and run zkapi-clientd config to enter the current shared password"
-@@ -322,13 +325,14 @@ func (c *Client) Complete(ctx context.Context, body json.RawMessage) (*http.Resp
+@@ -190,9 +237,13 @@ func (c *Client) request(ctx context.Context, method, path string, body []byte)
+ 			// allowlisted codes cross this boundary; its diagnostic message may
+ 			// contain private protocol state and is never forwarded.
+ 			var nested struct {
+-				Code string `json:"code"`
++				Code    string `json:"code"`
++				Message string `json:"message"`
+ 			}
+ 			_ = json.Unmarshal(failure.Error, &nested)
++			if code := companionDiagnostic(nested.Code, nested.Message); code != "" {
++				return nil, &Error{response.StatusCode, code}
++			}
+ 			var flat string
+ 			_ = json.Unmarshal(failure.Error, &flat)
+ 			for _, code := range []string{nested.Code, flat, failure.Code} {
+@@ -322,13 +373,14 @@ func (c *Client) Complete(ctx context.Context, body json.RawMessage) (*http.Resp
  }
  
  type providerLease struct {
@@ -779,7 +919,7 @@ index b386f1c..c2d5655 100644
  }
  
  type reusableLease struct {
-@@ -338,6 +342,9 @@ type reusableLease struct {
+@@ -338,6 +390,9 @@ type reusableLease struct {
  }
  
  func (c *Client) waitForLease(ctx context.Context, body json.RawMessage) (providerLease, error) {
@@ -789,3 +929,57 @@ index b386f1c..c2d5655 100644
  	waiting, retirementAttempted := false, false
  	for {
  		if err := ctx.Err(); err != nil {
+diff --git a/zkapi-clientd/internal/zkapi/diagnostics_test.go b/zkapi-clientd/internal/zkapi/diagnostics_test.go
+new file mode 100644
+index 0000000..bafd374
+--- /dev/null
++++ b/zkapi-clientd/internal/zkapi/diagnostics_test.go
+@@ -0,0 +1,48 @@
++package zkapi
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++)
++
++func TestCompanionDiagnosticsKeepOnlyFixedEnums(t *testing.T) {
++	for _, tc := range []struct{ code, message, want string }{
++		{"key_verification_failed", "OA key verification failed: verifier response binding mismatch", "verifier_binding_mismatch"},
++		{"key_verification_failed", "OA key verification failed: station is banned", "verifier_station_banned"},
++		{"key_verification_failed", "OA key verification failed: verifier did not approve this station and key", "verifier_response_rejected"},
++		{"key_verification_failed", "secret private-key prompt", "key_verification_failed"},
++		{"wallet_error", "wallet error: cannot sync lease reservation parent", "lease_reservation_failed"},
++		{"wallet_error", "secret private-key prompt", "wallet_error"},
++		{"secret private-key", "secret prompt", "companion_request_failed"},
++		{"other", "OA key verification failed: station is banned", "companion_request_failed"},
++	} {
++		t.Run(tc.want+tc.code, func(t *testing.T) {
++			calls := 0
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				calls++
++				if r.Method != http.MethodGet {
++					t.Error("diagnostic fixture retried with a write")
++				}
++				w.WriteHeader(502)
++				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": tc.code, "message": tc.message}})
++			}))
++			defer server.Close()
++			client, err := New(Config{ClientURL: server.URL, BridgeToken: testBridgeToken, HTTPClient: http.DefaultClient})
++			if err != nil {
++				t.Fatal(err)
++			}
++			_, err = client.request(context.Background(), http.MethodGet, "/diagnostic-fixture", nil)
++			failure, ok := err.(*Error)
++			if !ok || failure.Code != tc.want || failure.DiagnosticCode() != tc.want || calls != 1 {
++				t.Fatalf("wrong diagnostic: %v calls %d", err, calls)
++			}
++			if strings.Contains(failure.Error(), "secret") || strings.Contains(failure.Error(), "prompt") {
++				t.Fatal("private message leaked")
++			}
++		})
++	}
++}

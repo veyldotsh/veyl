@@ -1,5 +1,6 @@
 import { Problem, positive } from './agent.mjs';
 import { accountingIdentity, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
+import { readRuntimeFailureCode } from './runtime-diagnostics.mjs';
 
 // Interface review pin, not a claim that the local daemon's binary is attested.
 export const ZKAPI_SOURCE_REVISION = 'b826c169b4831665822529f535f824265f50630b';
@@ -52,7 +53,7 @@ export class ZkApiProvider {
       const response = await this.fetcher(this.base + path, { method: body ? 'POST' : 'GET', redirect: 'error',
         headers: { 'Content-Type': 'application/json', ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}), ...localHeaders },
         body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(body ? 180_000 : 15_000) });
-      if (!response.ok) { await response.body?.cancel(); const error = new Problem(`zkAPI returned HTTP ${response.status}. Check the daemon locally; requests are never automatically retried.`, 502); error.daemonUnavailable = response.status !== 404; throw error; }
+      if (!response.ok) { const diagnostic = await readRuntimeFailureCode(response); const error = new Problem(`zkAPI returned HTTP ${response.status}. Check the daemon locally; requests are never automatically retried.`, 502); if (diagnostic) error.runtimeFailureCode = diagnostic; error.daemonUnavailable = response.status !== 404; throw error; }
       const reader = response.body.getReader(); const chunks = []; let size = 0;
       while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 2_000_000) { await reader.cancel(); throw new Problem('Daemon response too large.', 502); } chunks.push(value); }
       return { data: JSON.parse(Buffer.concat(chunks).toString('utf8')), headers: response.headers };

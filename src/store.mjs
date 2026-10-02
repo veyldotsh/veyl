@@ -4,6 +4,7 @@ import { Problem } from './agent.mjs';
 import { validateCall, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
 import { validateResearchState, validateResearchJob } from './research.mjs';
 import { validateAutonomyState, validateAutonomyJob } from './autonomy.mjs';
+import { runtimeFailureCode } from './runtime-diagnostics.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const amount = value => Number.isSafeInteger(value) && value >= 0;
@@ -39,6 +40,7 @@ function validate(data, mode) {
         !['queued', 'running', 'completed', 'interrupted'].includes(job.status) || !date(job.day) || !amount(job.cap) || job.cap === 0 || job.cap > 1_000_000_000 ||
         !amount(job.reservation) || !Array.isArray(job.steps) || ![1, 3].includes(job.steps.length)) invalid();
     if ((job.model !== undefined && (typeof job.model !== 'string' || !job.model || job.model.length > 256)) || (job.dispatch !== undefined && job.dispatch !== 'scheduler') || (job.dispatch === 'scheduler' && !job.model)) invalid();
+    if (job.failureCode !== undefined && !runtimeFailureCode(job.failureCode)) invalid();
     if (!validateResearchJob(job, data.jobs)) invalid();
     if (!validateAutonomyJob(job, data.jobs)) invalid();
     if (job.storageReservationBytes !== undefined && (!amount(job.storageReservationBytes) || job.storageReservationBytes > TENANT_STATE_MAX_BYTES)) invalid();

@@ -19,8 +19,8 @@
     {
       "name": "companion",
       "path": "deployment/native/companion-accounting.patch",
-      "bytes": 51227,
-      "sha256": "2207864f1e6f3554f5231310134dcb95d0cd80eafa02b0d69cc08fa91cad1345",
+      "bytes": 55814,
+      "sha256": "c678c934301cd4b8512394c0decc90ed690292810fb2981c4c64f5dfd5f0e245",
       "files": [
         {
           "path": "crates/zkapi-clientd/src/lib.rs",
@@ -35,20 +35,20 @@
         {
           "path": "crates/zkapi-clientd/src/service.rs",
           "originalSha256LF": "42eb203dbb1f089965bea258660c1edff573ba3886d38d59d2c34381721bdbc1",
-          "patchedSha256LF": "259725473d7c28b56ba300f474068521839d865000976dbe46f2d6acdd28a2e7"
+          "patchedSha256LF": "396e15c91a6aa7dd62480d0667e1f0f365e519b1878144cac38ab41f1c7c8ed8"
         },
         {
           "path": "crates/zkapi-clientd/src/oa_accounting.rs",
           "originalSha256LF": null,
-          "patchedSha256LF": "67ff75d49bf4135a4318faa076966e407151e5c834577e29e2b02a78b47786c4"
+          "patchedSha256LF": "ad9f99e3781dd12d8e7b13ee38b2085d7fc0c73aeb38436bcd2cea73ed72ce5a"
         }
       ]
     },
     {
       "name": "protocol",
       "path": "deployment/native/protocol-accounting.patch",
-      "bytes": 35754,
-      "sha256": "05714739cf61dd23dfd4f02bdf74deeb12635127b1710afd3fa2561226203a6e",
+      "bytes": 42397,
+      "sha256": "22e8153ff582f3540729e88591ed2196ed726815b664dd205b092a9e2f5ba571",
       "files": [
         {
           "path": "rust/crates/zkapi-client/src/lib.rs",
@@ -63,7 +63,7 @@
         {
           "path": "rust/crates/zkapi-client/src/wallet_v2.rs",
           "originalSha256LF": "da31f53252e0938efdd62a6ce9516a68dfc76f26bdda6a09a88cf79c8c247838",
-          "patchedSha256LF": "b04bbdb72795870c293230b610549dc801d148c62b5fdb6f98e51c04cab1cbe4"
+          "patchedSha256LF": "74cafcc4c83d752d32d75356197aaf4891a06075768897a2ccca048f18d3298f"
         },
         {
           "path": "rust/crates/zkapi-client/src/settlement.rs",
@@ -75,8 +75,8 @@
     {
       "name": "go",
       "path": "deployment/native/go-accounting.patch",
-      "bytes": 31621,
-      "sha256": "8ac6133bc11e9983d62e492497e1894cf02b213693ec6f556e65135f893ad977",
+      "bytes": 40075,
+      "sha256": "b4246824d8cd7692c707cba926f2ec4e1ecdcf9c1849f9c1e12a4423ac445823",
       "files": [
         {
           "path": "zkapi-clientd/internal/accounting/context.go",
@@ -84,14 +84,24 @@
           "patchedSha256LF": "df81ecfb4c0f962e5d550888e345dbe59ee0967e5fe7deb23d7e26e62f54b278"
         },
         {
+          "path": "zkapi-clientd/internal/diagnostics/codes.go",
+          "originalSha256LF": null,
+          "patchedSha256LF": "9be3503c688497a627b12872181d17c7cbf1c6d86f2b62ef59c289ff49b5b88e"
+        },
+        {
           "path": "zkapi-clientd/internal/server/accounting_test.go",
           "originalSha256LF": null,
           "patchedSha256LF": "e13a440ac4964d413aa6e0cb53574b1168641822c47a34bd5063cd67c241f618"
         },
         {
+          "path": "zkapi-clientd/internal/server/diagnostics_test.go",
+          "originalSha256LF": null,
+          "patchedSha256LF": "65c45e7f0d6e661312a101f853d4a4707ed61a309c4a3b7cf51726acd132f38c"
+        },
+        {
           "path": "zkapi-clientd/internal/server/server.go",
           "originalSha256LF": "7df6605bd716e15658ed7ceb3c82ee26abbded51e66d95ef3e5d490412c336a3",
-          "patchedSha256LF": "d872df4975cd0a5f30d3907210e6385caa91b2842189199c0cfaaf5b1205d64e"
+          "patchedSha256LF": "4b4efed6974bbdfd3f2db8dbdf1a7aba4edcc9552d46f0fe1f3a280f8719ab92"
         },
         {
           "path": "zkapi-clientd/internal/zkapi/call_accounting.go",
@@ -106,7 +116,12 @@
         {
           "path": "zkapi-clientd/internal/zkapi/client.go",
           "originalSha256LF": "32b0956928bd8144af80262b6b2d59c8a389780be403578a2bcc1329f06c47a7",
-          "patchedSha256LF": "14c2da9f7b83fe960bc16f3a51047179800e3fd4ea9ebef1e837af1129d05385"
+          "patchedSha256LF": "ec2aeeea590b5ac8511da68b1c3a0c1e5d5bf0ab03e0e237ae19b3a76ebdf8d2"
+        },
+        {
+          "path": "zkapi-clientd/internal/zkapi/diagnostics_test.go",
+          "originalSha256LF": null,
+          "patchedSha256LF": "7f7d5a6c32e275e98e204ce4e3275f95b2979ca9359ee624b564cb1f47c01201"
         }
       ]
     }

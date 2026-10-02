@@ -11,7 +11,7 @@ index 05ce3d3..c6d8b0d 100644
  mod oa_station_trust;
 diff --git a/crates/zkapi-clientd/src/oa_accounting.rs b/crates/zkapi-clientd/src/oa_accounting.rs
 new file mode 100644
-index 0000000..0952262
+index 0000000..03e91b3
 --- /dev/null
 +++ b/crates/zkapi-clientd/src/oa_accounting.rs
 @@ -0,0 +1,757 @@
@@ -611,7 +611,7 @@ index 0000000..0952262
 +        let payload =
 +            json!({"type":"oa_org_ephemeral_lease_settlement","billing_quote":quote}).to_string();
 +        let response = RequestResponseV2 {
-+            status: "finalized".into(),
++            status: "ok".into(),
 +            client_request_id: request.client_request_id.clone(),
 +            request_nullifier: nullifier,
 +            response_code: 200,
@@ -875,7 +875,7 @@ index 5c69960..14b3c1f 100644
      async fn session_events_are_authenticated_browser_blocked_and_no_store() {
          let directory = tempfile::tempdir().unwrap();
 diff --git a/crates/zkapi-clientd/src/service.rs b/crates/zkapi-clientd/src/service.rs
-index 2334584..cf0735c 100644
+index 2334584..33791d3 100644
 --- a/crates/zkapi-clientd/src/service.rs
 +++ b/crates/zkapi-clientd/src/service.rs
 @@ -637,6 +637,7 @@ impl AuthService {
@@ -1092,6 +1092,15 @@ index 2334584..cf0735c 100644
          })
          .await
      }
+@@ -3802,7 +3871,7 @@ mod oa_withdrawal_tests {
+         config.protocol_server_url = format!("http://{}", listener.local_addr().unwrap());
+         let router = Router::new().route("/v2/requests/pending", get(move || {
+             seen.fetch_add(1, Ordering::SeqCst);
+-            async { Json(serde_json::json!({"status":"pending", "nullifier_status":"reserved"})) }
++            async { Json(serde_json::json!({"status":"ok", "nullifier_status":"reserved"})) }
+         }));
+         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+         let journal_path = config.state_dir.join("pending_journal.json");
 @@ -4146,6 +4215,51 @@ mod oa_native_recovery_tests {
          }
      }
@@ -1144,3 +1153,46 @@ index 2334584..cf0735c 100644
      #[tokio::test]
      async fn restart_replays_expired_frozen_quote_and_bound_without_new_oracle() {
          let (_directory,config,request)=fixture();let service=AuthService::new(config).unwrap();
+@@ -4158,7 +4272,7 @@ mod oa_native_recovery_tests {
+     fn settlement_changed_quote_preserves_note_and_journal() {
+         let (_directory,config,request)=fixture();let before=std::fs::read(config.state_dir.join("note_state.json")).unwrap();
+         let mut wallet=load_wallet(&config,Vec::new()).unwrap();
+-        let response:RequestResponseV2=serde_json::from_value(json!({"status":"finalized","client_request_id":request.client_request_id,"request_nullifier":request.public_inputs.request_nullifier,
++        let response:RequestResponseV2=serde_json::from_value(json!({"status":"ok","client_request_id":request.client_request_id,"request_nullifier":request.public_inputs.request_nullifier,
+             "response_code":200,"response_payload":"{}","response_hash":"0x0","charge_applied":0,"next_commitment":{"x":"0x0","y":"0x1"},
+             "next_anchor":"0x1","blind_delta_srv":"0x0","next_state_signature":{"r_x":"0x0","r_y":"0x1","s":"0x0"}})).unwrap();
+         let failure=wallet.complete_pending_response(&response).unwrap_err();assert!(failure.to_string().contains("changed the authorized quote"));
+@@ -4220,7 +4334,7 @@ mod oa_session_recovery_tests {
+                 &note.contract_address, &next_commitment.x, &next_commitment.y, &next_anchor);
+             let payload = json!({"type":"oa_org_ephemeral_lease_settlement", "secret":"receipt-metadata"}).to_string();
+             let response = RequestResponseV2 {
+-                status: "finalized".into(), client_request_id: "receipt-session".into(),
++                status: "ok".into(), client_request_id: "receipt-session".into(),
+                 request_nullifier: nullifier, response_code: 200,
+                 response_hash: zkapi_types::canonical_response_hash(payload.as_bytes()), response_payload: payload,
+                 charge_applied: charge, next_commitment, next_anchor, blind_delta_srv: Felt252::ONE,
+@@ -4230,7 +4344,7 @@ mod oa_session_recovery_tests {
+                 exists:true, client_request_id: response.client_request_id.clone(), nullifier,
+                 payload_hash:Felt252::ONE, user_rerandomization:Felt252::ONE, created_at_ms:1, prepared_request:None,
+             }).unwrap();
+-            let reply = Arc::new(Mutex::new(json!({"status":"pending","nullifier_status":"reserved"})));
++            let reply = Arc::new(Mutex::new(json!({"status":"ok","nullifier_status":"reserved"})));
+             let router = Router::new().route("/v2/requests/receipt-session", get(
+                 |State(reply): State<Arc<Mutex<Value>>>| async move { Json(reply.lock().unwrap().clone()) }
+             )).with_state(reply.clone());
+@@ -4245,13 +4359,13 @@ mod oa_session_recovery_tests {
+                     "hash" => invalid.response_payload = "{}".into(),
+                     _ => invalid.next_state_signature.s = Felt252::ZERO,
+                 }
+-                *reply.lock().unwrap() = json!({"status":"finalized","nullifier_status":"finalized","request_response":invalid});
++                *reply.lock().unwrap() = json!({"status":"ok","nullifier_status":"finalized","request_response":invalid});
+                 assert!(service.recover().await.is_err(), "{failure}");
+                 let snapshot = serde_json::to_value(service.oa_session_events()).unwrap();
+                 assert_eq!(snapshot["events"].as_array().unwrap().len(), 1);
+                 assert!(config.state_dir.join("pending_journal.json").exists());
+             }
+-            *reply.lock().unwrap() = json!({"status":"finalized","nullifier_status":"finalized","request_response":response});
++            *reply.lock().unwrap() = json!({"status":"ok","nullifier_status":"finalized","request_response":response});
+             // Two observers race recovery. The wallet mutex must produce just
+             // one signed settlement event before either can issue new access.
+             let (first, second) = tokio::join!(service.recover(), service.recover());

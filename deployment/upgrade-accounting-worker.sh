@@ -65,8 +65,9 @@ prep() {
     --property=TasksMax=64 --property=RuntimeMaxSec=600 --property=UMask=0077 --property=NoNewPrivileges=yes --property=PrivateTmp=yes \
     --property=Nice=19 --property=IOWeight=10 --setenv=PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin "$@"
 }
-# Both old native/proof provenance and the candidate's complete CI evidence must pass.
-prep /usr/bin/node "$release/scripts/verify-native-install.mjs"
+# The installed binary belongs to the old release's accepted build. Check the
+# candidate separately against the new release, then verify it again installed.
+prep /usr/bin/node "$old/scripts/verify-native-install.mjs"
 prep /usr/bin/node "$release/scripts/verify-accounting-runtime.mjs" "$candidate"
 candidate_digest=$(cd "$candidate" && sha256sum zkapi-clientd-control zkapi-walletd runtime-manifest.json source-lock.json build-report.json go-build-report.json)
 prep /usr/bin/npm ci --omit=dev --ignore-scripts --no-audit --no-fund

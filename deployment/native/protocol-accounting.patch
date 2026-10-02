@@ -264,7 +264,7 @@ index 0000000..34d6cbf
 +    Ok(())
 +}
 diff --git a/rust/crates/zkapi-client/src/wallet_v2.rs b/rust/crates/zkapi-client/src/wallet_v2.rs
-index 6c11ee2..380e444 100644
+index 6c11ee2..ddaa9ad 100644
 --- a/rust/crates/zkapi-client/src/wallet_v2.rs
 +++ b/rust/crates/zkapi-client/src/wallet_v2.rs
 @@ -21,6 +21,7 @@ use crate::config::{ClientConfig, ClientProofMode};
@@ -341,7 +341,7 @@ index 6c11ee2..380e444 100644
              return Err(ClientError::PendingRequest);
          }
          if canonical_payload_hash(payload.as_bytes()) != payload_hash {
-@@ -272,19 +281,75 @@ impl Wallet {
+@@ -272,19 +281,77 @@ impl Wallet {
          &mut self,
          response: &RequestResponseV2,
      ) -> Result<(), ClientError> {
@@ -384,7 +384,9 @@ index 6c11ee2..380e444 100644
 +        let response = &commit.response;
 +        if commit.version != 1
 +            || !journal.exists
-+            || response.status != "finalized"
++            // RequestResponseV2 uses `ok`; only the recovery envelope's
++            // nullifier_status uses `finalized` (processor_v2).
++            || response.status != "ok"
 +            || commit.prior_state.chain_id != self.config.chain_id
 +            || commit.prior_state.contract_address != self.config.contract_address
 +            || commit.prior_state.protocol_version != self.config.protocol_version
@@ -423,7 +425,7 @@ index 6c11ee2..380e444 100644
          let current = balance_commitment(
              state.current_balance,
              &parse_scalar(&state.balance_blinding)?,
-@@ -293,17 +358,98 @@ impl Wallet {
+@@ -293,17 +360,98 @@ impl Wallet {
          ensure_stored_commitment(state, &current)?;
          let anonymous = rerandomize(&current, &journal.user_rerandomization)
              .map_err(|error| ClientError::VerificationFailed(error.to_string()))?;
@@ -525,7 +527,7 @@ index 6c11ee2..380e444 100644
      /// Clear a request that the server explicitly rejected before reserving its
      /// nullifier (for example because the indexer root was stale).
      pub fn clear_pending_request(&self) -> Result<(), ClientError> {
-@@ -314,14 +460,19 @@ impl Wallet {
+@@ -314,14 +462,19 @@ impl Wallet {
          let Some(journal) = PendingRequestJournal::read(&self.journal_path)? else {
              return Ok(None);
          };
@@ -550,7 +552,32 @@ index 6c11ee2..380e444 100644
          let response = crate::testnet_auth::check_response(response)?;
          if response.status() == reqwest::StatusCode::NOT_FOUND {
              return Ok(None);
-@@ -451,16 +602,21 @@ impl Wallet {
+@@ -332,9 +485,22 @@ impl Wallet {
+             .json()
+             .await
+             .map_err(|error| ClientError::InvalidResponse(error.to_string()))?;
+-        let Some(response) = recovery.request_response else {
++        // Never confuse the request response's success marker with the
++        // envelope's nullifier finality. An absent/unsettled request must not
++        // advance the wallet, even if a malformed server includes a response.
++        if recovery.request_response.is_none()
++            && ((recovery.status == "not_found" && recovery.nullifier_status == "unknown")
++                || (recovery.status == "ok"
++                    && matches!(recovery.nullifier_status.as_str(), "reserved" | "clearance_reserved")))
++        {
+             return Ok(None);
+-        };
++        }
++        if recovery.status != "ok" || recovery.nullifier_status != "finalized" {
++            return Err(ClientError::InvalidResponse("invalid request recovery status".into()));
++        }
++        let response = recovery.request_response.ok_or_else(|| {
++            ClientError::InvalidResponse("finalized request recovery omitted its signed response".into())
++        })?;
+         self.complete_pending_response(&response)?;
+         Ok(Some(response))
+     }
+@@ -451,16 +617,21 @@ impl Wallet {
          &self,
          nullifier: &Felt252,
      ) -> Result<ClearanceResponseV2, ClientError> {
@@ -580,7 +607,7 @@ index 6c11ee2..380e444 100644
          let response = crate::testnet_auth::check_response(response)?;
          let status = response.status();
          let body = response
-@@ -473,14 +629,16 @@ impl Wallet {
+@@ -473,14 +644,16 @@ impl Wallet {
          serde_json::from_str(&body).map_err(|error| ClientError::InvalidResponse(error.to_string()))
      }
  
@@ -600,7 +627,7 @@ index 6c11ee2..380e444 100644
          if response.client_request_id != request_id || response.request_nullifier != nullifier {
              return Err(ClientError::VerificationFailed(
                  "response request identity mismatch".to_string(),
-@@ -491,11 +649,6 @@ impl Wallet {
+@@ -491,11 +664,6 @@ impl Wallet {
                  "response payload hash mismatch".to_string(),
              ));
          }
@@ -612,7 +639,7 @@ index 6c11ee2..380e444 100644
          if response.charge_applied > cap || response.next_anchor.is_zero() {
              return Err(ClientError::VerificationFailed(
                  "invalid charge or next anchor".to_string(),
-@@ -512,7 +665,6 @@ impl Wallet {
+@@ -512,7 +680,6 @@ impl Wallet {
                  "next commitment algebra mismatch".to_string(),
              ));
          }
@@ -620,7 +647,7 @@ index 6c11ee2..380e444 100644
          let message = core::state_message(
              state.protocol_version,
              state.chain_id,
-@@ -549,9 +701,7 @@ impl Wallet {
+@@ -549,9 +716,7 @@ impl Wallet {
          next.current_anchor = response.next_anchor;
          next.is_genesis = false;
          next.state_signature = Some(response.next_state_signature);
@@ -631,7 +658,7 @@ index 6c11ee2..380e444 100644
      }
  
      fn setup_dir(&self) -> &str {
-@@ -605,3 +755,250 @@ fn state_note_leaf(state: &NoteState) -> Felt252 {
+@@ -605,3 +770,351 @@ fn state_note_leaf(state: &NoteState) -> Felt252 {
          state.expiry_ts,
      )
  }
@@ -692,7 +719,7 @@ index 6c11ee2..380e444 100644
 +        );
 +        let payload = json!({"type":"oa_org_ephemeral_lease_settlement"}).to_string();
 +        let response = RequestResponseV2 {
-+            status: "finalized".into(),
++            status: "ok".into(),
 +            client_request_id: uuid::Uuid::new_v4().to_string(),
 +            request_nullifier: nullifier,
 +            response_code: 200,
@@ -720,6 +747,107 @@ index 6c11ee2..380e444 100644
 +        )
 +        .unwrap();
 +        (directory, wallet, response)
++    }
++
++    fn recovery_server(
++        request_id: &str,
++        body: serde_json::Value,
++    ) -> (String, std::thread::JoinHandle<()>) {
++        use std::io::{Read, Write};
++        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
++        let address = listener.local_addr().unwrap();
++        let expected = format!("GET /v2/requests/{request_id} HTTP/1.1\r\n");
++        let worker = std::thread::spawn(move || {
++            let (mut stream, _) = listener.accept().unwrap();
++            stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
++            let mut request = Vec::new();
++            let mut byte = [0u8; 1];
++            while !request.ends_with(b"\r\n\r\n") {
++                stream.read_exact(&mut byte).unwrap();
++                request.push(byte[0]);
++                assert!(request.len() < 16_384);
++            }
++            assert!(String::from_utf8(request).unwrap().starts_with(&expected));
++            let body = body.to_string();
++            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
++        });
++        (format!("http://{address}"), worker)
++    }
++
++    #[tokio::test]
++    async fn settlement_recovers_upstream_ok_response_only_after_finalized_wrapper() {
++        for charge in [0, 7] {
++            let (directory, mut wallet, mut response) = fixture(charge);
++            // processor_v2::response_from_record uses `ok` for the signed
++            // response; finality belongs to RecoveryResponseV2's wrapper.
++            response.status = "ok".into();
++            let (server, worker) = recovery_server(&response.client_request_id, json!({
++                "status":"ok", "nullifier_status":"finalized", "request_response":response
++            }));
++            wallet.config.server_url = server;
++            assert!(wallet.recover().await.unwrap().is_some());
++            worker.join().unwrap();
++            let receipt = wallet.verified_settlement(&response.client_request_id).unwrap().unwrap();
++            assert_eq!(receipt.charge_units, charge.to_string());
++            assert_eq!(wallet.state().unwrap().current_balance, 1000 - charge);
++            assert!(!wallet.has_pending_request());
++            assert!(wallet.recover().await.unwrap().is_none());
++            drop(wallet);
++            let restored = Wallet::new(config(&directory)).unwrap();
++            assert_eq!(restored.verified_settlement(&response.client_request_id).unwrap().unwrap().receipt_id, receipt.receipt_id);
++            std::fs::remove_dir_all(directory).unwrap();
++        }
++    }
++
++    #[tokio::test]
++    async fn settlement_recovery_rejects_conflicting_wrapper_and_inner_status_without_writes() {
++        for (outer, finality, inner) in [
++            ("error", "finalized", "ok"),
++            ("ok", "reserved", "ok"),
++            ("ok", "unknown", "ok"),
++            ("ok", "finalized", "pending"),
++            ("ok", "finalized", "finalized"),
++        ] {
++            let (directory, mut wallet, mut response) = fixture(0);
++            response.status = inner.into();
++            let before = std::fs::read(&wallet.journal_path).unwrap();
++            let (server, worker) = recovery_server(&response.client_request_id, json!({
++                "status":outer, "nullifier_status":finality, "request_response":response
++            }));
++            wallet.config.server_url = server;
++            assert!(wallet.recover().await.is_err(), "{outer}/{finality}/{inner}");
++            worker.join().unwrap();
++            assert_eq!(std::fs::read(&wallet.journal_path).unwrap(), before);
++            assert_eq!(wallet.state().unwrap().current_balance, 1000);
++            assert!(wallet.verified_settlement(&response.client_request_id).unwrap().is_none());
++            assert!(!directory.join("settlement_commit.json").exists());
++            std::fs::remove_dir_all(directory).unwrap();
++        }
++    }
++
++    #[tokio::test]
++    async fn settlement_recovery_retains_unsettled_or_missing_request() {
++        for (status, finality, valid) in [
++            ("not_found", "unknown", true),
++            ("ok", "reserved", true),
++            ("ok", "clearance_reserved", true),
++            ("ok", "finalized", false),
++            ("error", "unknown", false),
++        ] {
++            let (directory, mut wallet, response) = fixture(0);
++            let before = std::fs::read(&wallet.journal_path).unwrap();
++            let (server, worker) = recovery_server(&response.client_request_id, json!({
++                "status":status, "nullifier_status":finality
++            }));
++            wallet.config.server_url = server;
++            let result = wallet.recover().await;
++            if valid { assert!(result.unwrap().is_none()); } else { assert!(result.is_err()); }
++            worker.join().unwrap();
++            assert_eq!(std::fs::read(&wallet.journal_path).unwrap(), before);
++            assert_eq!(wallet.state().unwrap().current_balance, 1000);
++            assert!(wallet.verified_settlement(&response.client_request_id).unwrap().is_none());
++            std::fs::remove_dir_all(directory).unwrap();
++        }
 +    }
 +
 +    #[test]
