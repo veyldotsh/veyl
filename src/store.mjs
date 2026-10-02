@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, fsyncSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Problem } from './agent.mjs';
+import { validateCall, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const amount = value => Number.isSafeInteger(value) && value >= 0;
@@ -11,7 +12,7 @@ const bytes = value => Buffer.byteLength(JSON.stringify(value));
 function validate(data, mode) {
   const invalid = () => { throw new Error('State schema or accounting mismatch. Preserve recovery data.'); };
   if (!object(data) || data.version !== 2 || data.mode !== mode || !Array.isArray(data.projects) || !Array.isArray(data.jobs)) invalid();
-  const projects = new Map(), keys = new Set(), jobs = new Set(), totals = new Map(), days = new Map();
+  const projects = new Map(), keys = new Set(), jobs = new Set(), totals = new Map(), days = new Map(), calls = new Set(), receipts = new Set(), sessions = new Set();
   for (const p of data.projects) {
     if (!object(p) || typeof p.id !== 'string' || projects.has(p.id) || typeof p.requestKey !== 'string' || keys.has(p.requestKey) ||
         !['active', 'paused'].includes(p.status) || !['research', 'builder', 'community'].includes(p.template) || typeof p.swarm !== 'boolean' ||
@@ -23,6 +24,8 @@ function validate(data, mode) {
         !p.notes.every(n => object(n) && typeof n.content === 'string') || !p.sources.every(s => object(s) && typeof s.url === 'string' && typeof s.text === 'string') ||
         !p.artifacts.every(a => object(a) && typeof a.id === 'string' && typeof a.title === 'string' && typeof a.content === 'string')) invalid();
     if (p.schedule !== null && (!object(p.schedule) || ![15, 60, 1440].includes(p.schedule.minutes) || typeof p.schedule.prompt !== 'string' || !Number.isFinite(Date.parse(p.schedule.nextAt)))) invalid();
+    if (p.accountingJournalId !== undefined && !/^[0-9a-f]{32}$/.test(p.accountingJournalId)) invalid();
+    if (p.accountingRecoveryCursor !== undefined && !amount(p.accountingRecoveryCursor)) invalid();
     projects.set(p.id, p); keys.add(p.requestKey); totals.set(p.id, 0); days.set(p.id, new Map());
   }
   keys.clear();
@@ -33,17 +36,30 @@ function validate(data, mode) {
         !amount(job.reservation) || !Array.isArray(job.steps) || ![1, 3].includes(job.steps.length)) invalid();
     if ((job.model !== undefined && (typeof job.model !== 'string' || !job.model || job.model.length > 256)) || (job.dispatch !== undefined && job.dispatch !== 'scheduler') || (job.dispatch === 'scheduler' && !job.model)) invalid();
     if (job.storageReservationBytes !== undefined && (!amount(job.storageReservationBytes) || job.storageReservationBytes > TENANT_STATE_MAX_BYTES)) invalid();
+    if (job.modelCap !== undefined && (mode !== 'zkapi' || !amount(job.modelCap) || job.modelCap < 1 || job.cap !== job.modelCap + ACCOUNTING_MARGIN_MICRO_USD)) invalid();
+    const heldFor = call => {
+      if (call === undefined) return job.cap;
+      if (job.modelCap === undefined || calls.has(call.callId)) invalid();
+      const held = validateCall(call, { journalId: p.accountingJournalId, cap: job.cap, modelCap: job.modelCap });
+      calls.add(call.callId);
+      const session = call.report?.binding?.session_id, receipt = call.report?.receipt?.receipt_id;
+      if (session) { const id = call.journalId + ':' + session; if (sessions.has(id)) invalid(); sessions.add(id); }
+      if (receipt) { const id = call.journalId + ':' + receipt; if (receipts.has(id)) invalid(); receipts.add(id); }
+      return held;
+    };
     let reservation = 0;
     for (const step of job.steps) {
       if (!object(step) || !['queued', 'running', 'completed', 'uncertain'].includes(step.status)) invalid();
-      const day = step.day ?? job.day, held = step.simulatedCharge ?? job.cap;
+      const day = step.day ?? job.day, held = step.simulatedCharge ?? heldFor(step.callAccounting);
+      if (step.callAccounting && (mode !== 'zkapi' || step.status === 'queued')) invalid();
       if (!date(day) || !amount(held) || held > job.cap || (step.simulatedCharge !== undefined && (mode !== 'demo' || step.status !== 'completed'))) invalid();
       reservation += held; days.get(p.id).set(day, (days.get(p.id).get(day) || 0) + held);
       if (step.additionalCalls !== undefined) {
         if (mode !== 'zkapi' || !Array.isArray(step.additionalCalls) || step.additionalCalls.length > 3) invalid();
         for (const call of step.additionalCalls) {
           if (!object(call) || !date(call.day) || !['running', 'completed', 'uncertain'].includes(call.status)) invalid();
-          reservation += job.cap; days.get(p.id).set(call.day, (days.get(p.id).get(call.day) || 0) + job.cap);
+          const held = heldFor(call.callAccounting);
+          reservation += held; days.get(p.id).set(call.day, (days.get(p.id).get(call.day) || 0) + held);
         }
       }
     }
@@ -80,7 +96,7 @@ export class Store {
       // Only a durable scheduler record matching this exact untouched job can
       // preserve admission. Never infer safety from a queued label alone.
       let restored = false;
-      if (job.status === 'queued' && job.dispatch === 'scheduler' && job.reservation === job.cap * job.steps.length && job.steps.every(step => step.status === 'queued' && step.output === undefined && !step.additionalCalls?.length && !step.toolActivity?.length)) {
+      if (job.status === 'queued' && job.dispatch === 'scheduler' && job.reservation === job.cap * job.steps.length && job.steps.every(step => step.status === 'queued' && step.output === undefined && !step.callAccounting && !step.additionalCalls?.length && !step.toolActivity?.length)) {
         try { restored = preserveQueued(job) === true; } catch { /* No proof means no dispatch. */ }
       }
       if (restored) continue;

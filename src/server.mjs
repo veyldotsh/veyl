@@ -77,14 +77,17 @@ export function createApp(kit) {
       }
       const assets = { '/': ['site.html', 'text/html'], '/app': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/site.js': ['site.js', 'text/javascript'], '/site.css': ['site.css', 'text/css'], '/fonts.css': ['fonts.css', 'text/css'], '/field.svg': ['field.svg', 'image/svg+xml'], '/docs': ['docs.html', 'text/html'], '/docs.css': ['docs.css', 'text/css'], '/brand': ['brand.html', 'text/html'], '/logo.svg': ['logo.svg', 'image/svg+xml'], '/logo-light.svg': ['logo-light.svg', 'image/svg+xml'], '/logo-mono.svg': ['logo-mono.svg', 'image/svg+xml'] };
       assets['/developers'] = ['developers.html', 'text/html'];
+      assets['/oauth/x'] = ['oauth-callback.html', 'text/html'];
+      for (const file of ['site.html', 'index.html', 'docs.html', 'developers.html', 'brand.html', 'oauth-callback.html']) assets[`/${file}`] = [file, 'text/html'];
       assets['/developer-panel.css'] = ['developer-panel.css', 'text/css'];
       assets['/docs.js'] = ['docs.js', 'text/javascript'];
       assets['/panels.js'] = ['panels.js', 'text/javascript'];
-      for (const file of ['session.js', 'wallet.js', 'chain-client.js', 'mainnet-panel.js', 'social-panel.js', 'runway-panel.js', 'developer-panel.js']) assets[`/${file}`] = [file, 'text/javascript'];
+      for (const file of ['session.js', 'wallet.js', 'chain-client.js', 'mainnet-panel.js', 'social-panel.js', 'runway-panel.js', 'developer-panel.js', 'oauth-callback.js']) assets[`/${file}`] = [file, 'text/javascript'];
+      assets['/oauth-callback.css'] = ['oauth-callback.css', 'text/css'];
       assets['/social-panel.css'] = ['social-panel.css', 'text/css'];
       assets['/runway-panel.css'] = ['runway-panel.css', 'text/css'];
       assets['/brand.css'] = ['brand.css', 'text/css'];
-      for (const file of ['veyl-wordmark.svg', 'veyl-wordmark-light.svg', 'veyl-avatar.svg']) assets[`/${file}`] = [file, 'image/svg+xml'];
+      for (const file of ['veyl-wordmark.svg', 'veyl-wordmark-light.svg', 'veyl-avatar.svg', 'veyl-lockup.svg', 'veyl-lockup-light.svg']) assets[`/${file}`] = [file, 'image/svg+xml'];
       for (const file of ['veyl-avatar.png', 'veyl-logo.png', 'veyl-logo-light.png', 'veyl-x-banner.png']) assets[`/${file}`] = [file, 'image/png'];
       if (req.method === 'GET' && assets[url.pathname]) { const [file, type] = assets[url.pathname]; res.writeHead(200, { 'Content-Type': type + (type === 'image/png' ? '' : '; charset=utf-8') }); return res.end(readFileSync(resolve(root, 'public', file))); }
       json(404, { error: 'Not found.' });

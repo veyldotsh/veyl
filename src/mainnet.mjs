@@ -10,6 +10,8 @@ import { mainnet } from 'viem/chains';
 import { Problem } from './agent.mjs';
 
 export const ETHEREUM_POOL_MANAGER = '0x000000000004444c5dc75cB358380D2e3dE08A90';
+export const VEYL_MAIN_TOKEN_SALT_LABEL = 'veyl:ethereum:main-token:v1';
+export const VEYL_MAIN_TOKEN_SALT = keccak256(stringToHex(VEYL_MAIN_TOKEN_SALT_LABEL));
 const Q96 = 1n << 96n, SUPPLY = parseEther('1000000000');
 const LAUNCH_LIMIT = parseEther('20000000');
 const INFRA_STAGES = [
@@ -206,6 +208,12 @@ export class MainnetMarkets {
   launchConfig(project, input, timestamp) {
     const account = nonzero(input.account, 'connected wallet'), owner = nonzero(input.treasuryOwner, 'treasury owner'), operator = nonzero(input.operator, 'operator');
     const policy = this.capabilities(project), maxQuote = decimal(input.liquidityQuote ?? (policy.quoteKind === 'native' ? input.liquidityEth : undefined), 'liquidity ' + policy.quoteSymbol), maxToken = decimal(input.liquidityTokens, 'liquidity tokens');
+    let salt = keccak256(stringToHex(`veyl:ethereum:${project.id}`));
+    if (this.protectedPreset(project) && this.config.project?.launchSalt !== undefined) {
+      if (this.config.project.launchSalt !== VEYL_MAIN_TOKEN_SALT) throw new Problem('The main-token salt differs from the published deterministic launch plan.', 409);
+      if (!equal(account, this.config.addresses?.deployer) || !equal(owner, this.config.addresses?.owner)) throw new Problem('Only the configured main-token deployer and treasury owner can prepare the canonical Veyl launch.', 403);
+      salt = VEYL_MAIN_TOKEN_SALT;
+    }
     if (policy.launchProtection && this.config.trading?.launchProtection !== true) throw new Problem('The reviewed Veyl launch requires its configured 2% launch protection. No launch was prepared.', 409);
     if (input.launchProtection !== undefined && input.launchProtection !== policy.launchProtection) throw new Problem('Launch protection differs from the reviewed project policy.', 409);
     if (maxToken > SUPPLY) throw new Problem('Liquidity tokens exceed the fixed one-billion supply.');
@@ -217,7 +225,7 @@ export class MainnetMarkets {
     if (price < LIMIT.buy || price > LIMIT.sell) throw new Problem('Initial price is outside Uniswap v4 bounds.');
     if (policy.lpFeePips !== 0 || !Number.isSafeInteger(policy.feeBps.buy) || !Number.isSafeInteger(policy.feeBps.sell) || policy.feeBps.buy < 0 || policy.feeBps.sell < 0 || policy.feeBps.buy > 1000 || policy.feeBps.sell > 1000) throw new Problem('Invalid configured Veyl fee policy.', 409);
     return { account, slippage: slippageOf(input.slippageBps), config: {
-      salt: keccak256(stringToHex(`veyl:ethereum:${project.id}`)), name: project.name, symbol: project.symbol, treasuryOwner: owner, operator,
+      salt, name: project.name, symbol: project.symbol, treasuryOwner: owner, operator,
       dailyLimit: decimal(input.dailyLimitEth, 'daily treasury limit', true), treasuryEth: decimal(input.treasuryEth, 'initial treasury ETH', true),
       buyFeeBps: policy.feeBps.buy, sellFeeBps: policy.feeBps.sell, lpFeePips: 0, tickSpacing: spacing,
       sqrtPriceX96: price, tickLower: lower, tickUpper: upper, liquidity: 0n, maxToken, maxQuote, minToken: 0n, minQuote: 0n, deadline: timestamp + 900n, launchProtection: policy.launchProtection

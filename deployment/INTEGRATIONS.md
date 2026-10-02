@@ -86,30 +86,36 @@ settings. They are not proofs of inference correctness, hidden prompts, or
 finalized per-job charges. The companion wallet verifies the protocol's signed
 state and commitment transitions internally.
 
-The pinned native companion does export an authenticated operational feed at
-`GET /oa/v1/session-events`. A `settled` event is emitted only after wallet
-recovery verifies and installs the signed state; it includes `session_id`,
-`charge_units` and `balance_units`. For the mainnet deployment these amounts
-are native-ETH gwei. This is genuine companion-verified settlement evidence.
-However, the feed retains only 128 events in memory, resets its instance and
-sequence on restart, and is not a durable billing ledger. Its session ID hashes
-the native request identity. The Go chat response and lease response do not
-export that identity to Veyl, and its local `key_ref` is a different counter.
-Neither timing proximity nor a balance difference proves which Veyl call paid.
+Veyl's accounting extension is pinned in `deployment/native/source-lock.json`.
+It adds authenticated per-call lookup instead of relying on the upstream
+128-entry, process-local session event feed. The profile journal identity
+persists across restarts. Every model round records a UUID and reserves the
+catalog cap plus 1,000 microdollars inside the owner's limits. Before external
+lease issuance, the native wallet durably binds that UUID to its private
+session and original ETH/USD quote. A native cap above the saved reservation
+blocks inference. Tracked calls do not reuse keys or automatically retry.
 
-An exact-charge refund integration therefore needs a pinned upstream extension:
-export a trusted call-to-native-session binding at lease issuance, persist it
-before dispatch, and expose durable acknowledged settlement events with reset
-and gap detection. Conversion back to a USD budget also needs the verified
-pricing quote bound to that lease, not today's exchange rate. It must reject
-foreign, duplicate, missing and malformed events and preserve uncertain calls
-across crashes. Veyl has not substituted an unsigned provider field or changed
-the protocol's cryptography to fill this gap.
+Wallet recovery verifies the actual signed state and commitment transition.
+It durably records the receipt before clearing the pending request. Recovery
+finishes an interrupted commit without charging twice. The authenticated
+`/v1/call-settlements/{call_id}` lookup returns only public accounting fields;
+private wallet notes, credentials and signing material remain local.
 
-Veyl therefore accounts for each live model request at its full spending ceiling.
-Successful responses, tool rounds and uncertain calls retain that reservation.
-Budget settings can be raised by the owner; no estimate, provider `usage.cost`,
-balance subtraction or local HMAC is presented as a verified settlement refund.
+The exact ETH charge is stored as integer gwei and displayed as wei/ETH without
+floating-point conversion. Its USD budget value uses the saved quote and rounds
+up to the next microdollar. This is not an assertion of exact provider USD cost.
+The worker validates the profile, call, session, quote and immutable receipt,
+applies it once, then releases the unused reservation. Unknown, missing,
+malformed and legacy untracked calls stay held. A bounded read-only maintenance
+pass reconciles at most eight calls per minute, including interrupted jobs.
+
+The journals stop new admission at their 10,000-record retention limit rather
+than silently deleting evidence. The first version requires operator review
+before that limit is reached; it does not claim unlimited billing retention.
+No provider `usage.cost`, timing proximity, balance subtraction or local HMAC
+is presented as a signed settlement. This is authenticated local reconciliation,
+not a publicly verifiable proof of prompt execution. Live funded settlement and
+withdrawal acceptance remain unperformed under the current instruction.
 
 The pinned daemon accepts OpenAI-style `tools`, `tool_choice`, assistant
 `tool_calls` and tool-role messages. Veyl limits calls to its offered catalog,

@@ -2,7 +2,9 @@
 
 An Ethereum agent workspace with persistent context, bounded tools, solo or three-stage workflows, operating treasuries and zkAPI inference payments. Product domain: **veyl.sh** · [X: @Veyldotsh](https://x.com/Veyldotsh).
 
-**The gated prelaunch website and bounded production worker are online. No Veyl mainnet contracts are deployed.** The default local app simulates inference and uses development ETH. Mainnet transaction submission, daemon funding approval and social publishing are disabled by default. Live funded inference, recovery and social acceptance were deliberately not run at the owner’s request. Fixture and fork coverage does not establish live-provider acceptance or constitute an independent audit.
+The website and authenticated worker are online. Ethereum contracts are not deployed; transaction, funding and publishing approval remain off. Local development uses simulated inference and development ETH. Funded inference, recovery and social-provider acceptance are untested; fixture and fork coverage is not an independent audit.
+
+**Predicted VEYL address:** [`0x2eaB833d244352D4A7f8dC93285B1776F01954cB`](https://etherscan.io/address/0x2eaB833d244352D4A7f8dC93285B1776F01954cB). The reviewed deployer, nonce sequence, canonical salt and bytecode must remain unchanged. Nonce 0 creates the quoter, not the token. The full calculation is in `config/public-addresses.json`; reproduce it with `node scripts/predict-public-addresses.mjs`.
 
 ## Run the local demo
 
@@ -81,7 +83,7 @@ The inference route is **Veyl → zkAPI → OpenRouter → the chosen model/prov
 
 The adapter is pinned to upstream revision `b826c169b4831665822529f535f824265f50630b`. It reads `/v1/models`, reserves `oa_request_limit_micro_usd`, and uses `/v1/chat/completions`, including reviewed tool-call passthrough. The installer builds a narrowly patched control daemon so an unfunded profile can expose its catalog and funding controls; a build manifest records source/binary identity. Catalog and readiness are checked separately because HTTP health can precede model readiness.
 
-**A response is not a reconciled charge.** Live success and uncertain responses both retain the full caps. The public inference boundary does not export a stable per-job private lease ID plus wallet-verified signed settlement receipt. Veyl does not invent this linkage or trust provider cost fields as a refund. Automatic cap release needs that additional reviewed integration. Requests are not automatically retried, and catalog caps are not cryptographic USD ceilings.
+**A response is not a reconciled charge.** Tracked calls require the Veyl accounting extension to the pinned native daemon. Each model round saves a call ID before dispatch and reserves the model cap plus an explicit $0.001 rounding allowance within the owner’s limits. The daemon binds that call to its private session and frozen ETH/USD quote before requesting a lease. It refuses a native cap that exceeds the saved reservation. After the wallet verifies the signed state transition, a durable receipt records the exact ETH charge in integer gwei. Veyl applies that receipt once, values it at the original quote rounded up to microdollars, and releases the unused reservation. Missing, uncertain and older untracked calls remain held. Provider `usage.cost`, timing and balance differences are never used as settlement evidence. This is authenticated local reconciliation, not a public proof of model execution. Requests are never automatically retried.
 
 ## Privacy and control
 
@@ -122,7 +124,7 @@ The automatic-funding fork passed at block **26,100,799**: 0.0009 ETH in swap fe
 
 On **1 October 2026**, native ARM64 daemon/companion checks returned **389 catalog models** without funding. The installed bounded worker serves the authenticated gateway, and live wallet-session isolation, replay denial, CSRF denial and logout were checked. These checks did not perform paid inference, proof generation, social publishing or sustained funded load. No Veyl market or operator signer was deployed or armed.
 
-Live provider and funded acceptance are intentionally unrun under the current instruction. Before any later paid enablement, explicitly revisit those limits and measure proof CPU/RAM; review production liquidity and recipient settings; keep social publishing disabled until separately authorized; review contracts/operations independently; then explicitly approve transaction enablement. Website publication does not enable chain actions. Per-job signed settlement correlation remains a separate accounting gap. Passing configuration checks alone cannot make `deploymentReady` true.
+Live provider and funded acceptance are intentionally unrun under the current instruction. Before any later paid enablement, explicitly revisit those limits and measure proof CPU/RAM; review production liquidity and recipient settings; keep social publishing disabled until separately authorized; review contracts/operations independently; then explicitly approve transaction enablement. Website publication does not enable chain actions. The accounting extension requires its matching native build; funded settlement and recovery acceptance remain unperformed. Passing configuration checks alone cannot make `deploymentReady` true.
 
 ## Recovery and code map
 

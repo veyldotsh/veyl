@@ -24,7 +24,7 @@ function renderSignIn(message = '') {
   document.querySelectorAll('[data-launch], .sidebar .nav').forEach(el => el.disabled = true);
   $('project-nav').innerHTML = ''; $('job-count').textContent = '0';
   $('mode').textContent = 'PRIVATE WORKSPACE'; $('runtime-status').textContent = 'Sign in to continue';
-  $('wallet-control').textContent = 'Connect wallet'; $('chain-label').textContent = 'Ethereum · launch pending';
+  $('wallet-control').textContent = 'Connect wallet'; $('chain-label').textContent = 'Ethereum';
   $('content').innerHTML = `<section class="signin-panel"><img src="/logo.svg" alt="" width="64" height="64"><p class="eyebrow">YOUR IDEAS HAVE A HOME.</p><h1>Welcome to Veyl.</h1><p>One workspace for your agents, their memory and the work they deliver.</p><button class="button" data-signin>Connect & sign in ↗</button><p class="hint">Sign an ownership message with your Ethereum wallet. Signing in costs no gas and sends no transaction.</p>${message ? `<p class="error" role="alert">${esc(message)}</p>` : ''}<a class="text-link" href="/docs#start">Get to know Veyl →</a></section>`;
 }
 async function signIn(button) {
@@ -56,7 +56,7 @@ async function loadProjectModels(id) {
     const list = await api(state.hosted ? `/api/projects/${id}/models` : '/api/models');
     if (selected !== id || !$('project-model')) return;
     const current = state.projects.find(p => p.id === id)?.model;
-    $('project-model').innerHTML = list.length ? list.map(m => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${esc(m.id)} · ${money(m.oa_request_limit_micro_usd)} cap</option>`).join('') : '<option value="pending">Awaiting model catalog</option>';
+    $('project-model').innerHTML = list.length ? list.map(m => `<option value="${esc(m.id)}" ${m.id === current ? 'selected' : ''}>${esc(m.id)} · ${money(m.oa_request_limit_micro_usd)} cap${m.oa_accounting_margin_micro_usd ? ` + ${(m.oa_accounting_margin_micro_usd / 1e6).toFixed(3)} USD reserve` : ''}</option>`).join('') : '<option value="pending">Awaiting model catalog</option>';
     $('model-status').textContent = list.length ? 'Catalog from this agent’s inference provider.' : 'The dedicated inference service is starting. Reopen this tab to refresh.';
   } catch (error) { if (selected === id && $('model-status')) $('model-status').textContent = error.message; }
 }

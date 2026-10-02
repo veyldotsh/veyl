@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "sourceCommit": "efce3b04be7af819404b777c6d41f31ea1a5029e",
+  "runId": "36951966352",
+  "sourceLockSha256": "b16776ab04de2209a4c43c7670ed10333c6d3ef7269ef3bee47c3a5b50e4ac69",
+  "walletSha256": "ffca90c4e81a187fd23a6910412306e29dcff407efe25fcecbfb12d0e8341f83",
+  "clientSha256": "01a9e91842dd22d7035bbb3b522b6a6c9383ec3f5a00ada988e7ec45dac94efe",
+  "builderSha256": "af9c15a914e284496b714d13c6baba153cb10f7871ac98f9d574af85e38b3ad2",
+  "controlPatchSha256": "beb1279f77ce9a58e81a7d1db69349ca7e16b23712a869901f4b72d2f3812da1"
+}

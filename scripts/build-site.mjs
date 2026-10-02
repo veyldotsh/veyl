@@ -4,6 +4,16 @@ import { buildDeveloperPackage } from './build-developer-package.mjs';
 const source = resolve('public'), destination = resolve('dist');
 const hosted = process.argv.includes('--hosted');
 if (process.argv.slice(2).some(arg => arg !== '--hosted')) throw new Error('Unknown website build option.');
+// Public copy must match the reviewed prediction artifact. Recomputing CREATE2
+// from compiled contracts belongs to contract validation, not a source-only web build.
+const prediction = JSON.parse(readFileSync(resolve('config/public-addresses.json'), 'utf8'));
+const tokenAddress = prediction.token?.address;
+if (!/^0x[0-9a-fA-F]{40}$/.test(tokenAddress || '') || prediction.token.status !== 'conditional-prediction' || prediction.token.deployed !== false) throw new Error('Review token address labels against the public deployment record before building.');
+for (const name of ['docs.html']) {
+  const html = readFileSync(resolve(source, name), 'utf8');
+  const addresses = [...html.matchAll(/data-veyl-token="([^"]+)"/g)].map(match => match[1]);
+  if (addresses.length !== 1 || addresses[0] !== tokenAddress || !html.includes(`href="https://etherscan.io/address/${tokenAddress}"`) || !html.includes(`<code>${tokenAddress}</code>`)) throw new Error(`Public token address differs from the reviewed prediction in ${name}.`);
+}
 mkdirSync(destination, { recursive: true });
 const allowed = new Set(['.html', '.css', '.js', '.svg', '.png', '.woff2', '.ico', '.txt', '.json']);
 for (const item of readdirSync(source, { withFileTypes: true })) {
@@ -12,12 +22,7 @@ for (const item of readdirSync(source, { withFileTypes: true })) {
 if (hosted) {
   const site = resolve(destination, 'site.html');
   const replacements = [
-    ['Explore the local preview.', 'Explore the prelaunch workspace.'],
-    ['Local preview · simulated inference · no wallet needed', 'Prelaunch workspace · wallet sign-in · mainnet launch pending'],
-    ['Local v4 swaps fund the treasury. Mainnet is not deployed.', 'Ethereum markets and paid inference remain gated pending launch acceptance.'],
-    ['The local preview also launches a token, trading pool, locked liquidity and operating treasury on Anvil using development ETH.', 'Creating a workspace does not deploy a token or spend funds. Market deployment requires a separate wallet transaction after launch is enabled.'],
-    ['This preview runs real v4 contracts locally.', 'The contracts have been rehearsed locally against Ethereum pool infrastructure.'],
-    ['LOCAL PREVIEW · MAINNET NOT DEPLOYED', 'PRELAUNCH · MAINNET NOT DEPLOYED']
+    ['Local demo · simulated inference', 'Wallet sign-in · project-scoped access']
   ];
   let html = readFileSync(site, 'utf8');
   for (const [before, after] of replacements) {
@@ -31,4 +36,4 @@ if (hosted) {
   writeFileSync(app, html);
 }
 const sdk = buildDeveloperPackage(resolve(destination, 'downloads'));
-console.log(`Built ${hosted ? 'hosted prelaunch' : 'local preview'} Veyl site and ${sdk.name}@${sdk.version}. Runtime and private state are excluded.`);
+console.log(`Built ${hosted ? 'hosted' : 'local demo'} Veyl site and ${sdk.name}@${sdk.version}. Runtime and private state are excluded.`);

@@ -2,7 +2,9 @@
   "chainId": 1,
   "project": {
     "name": "Veyl",
-    "symbol": "VEYL"
+    "symbol": "VEYL",
+    "launchSalt": "0x672a9aa9fcb689142afad0e644046d02e8713ac0718f81d7f72f22577e81be59",
+    "launchSaltLabel": "veyl:ethereum:main-token:v1"
   },
   "addresses": {
     "deployer": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
@@ -35,7 +37,7 @@
   "zkapi": {
     "daemonHostPlan": "Installed prelaunch shared-VPS pilot: one running job and daemon pair, fifty saved profiles, two CPU cores and 4 GiB aggregate memory cap with no swap. The authenticated gateway is connected; funded execution and mainnet writes remain disabled. Move to a separate server before growing production workloads.",
     "maxPrepaidEth": null,
-    "reconciliationPolicy": "Reserve the full current catalog cap before each live model call, retain unresolved caps, and never automatically replay uncertain inference. Per-job signed final-charge reconciliation is not available from the current daemon interface; funded lifecycle acceptance remains required."
+    "reconciliationPolicy": "Reserve each live model catalog cap plus a bounded 1000 microUSD rounding allowance before dispatch. Reconcile exact ETH charges only from authenticated durable native receipts bound to the saved call, session, journal and original quote; release unused budget once. Unknown or legacy calls stay held and inference is never automatically replayed. Real funded acceptance was deliberately not run."
   },
   "confirmations": {
     "freshSignerConfirmed": false

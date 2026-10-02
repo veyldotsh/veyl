@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "chainId": 1,
+  "generatedAt": "2026-10-02T01:46:39.084Z",
+  "calculationOnly": true,
+  "transactionSent": false,
+  "deployer": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+  "creator": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+  "protocolRecipient": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+  "poolManager": "0x000000000004444c5dc75cB358380D2e3dE08A90",
+  "quoteAsset": "0x0000000000000000000000000000000000000000",
+  "startingNonce": "0",
+  "deployments": [
+    {
+      "contract": "VeylQuoter",
+      "nonce": "0",
+      "address": "0x8a470CF07638E659211dd116b1ab3aA757a40376",
+      "method": "CREATE",
+      "deployed": false
+    },
+    {
+      "contract": "VeylProjectBuilder",
+      "nonce": "1",
+      "address": "0x3F352196444d913146111f31bF6423B041bbDF31",
+      "method": "CREATE",
+      "deployed": false
+    },
+    {
+      "contract": "VeylMarketBuilder",
+      "nonce": "2",
+      "address": "0x624E2F6d2C196b14A37d504C8404525B1BeD951c",
+      "method": "CREATE",
+      "deployed": false
+    },
+    {
+      "contract": "VeylLiquidityBuilder",
+      "nonce": "3",
+      "address": "0x6136c29498De82B2270DD589B6D06a6Cb8f31646",
+      "method": "CREATE",
+      "deployed": false
+    },
+    {
+      "contract": "VeylMarketFactory",
+      "nonce": "4",
+      "address": "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+      "method": "CREATE",
+      "deployed": false
+    }
+  ],
+  "factoryChildren": [
+    {
+      "contract": "VeylProjectDeployer",
+      "builder": "0x3F352196444d913146111f31bF6423B041bbDF31",
+      "salt": "0x000000000000000000000000Dca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+      "constructorArguments": [
+        "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+        "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+        "0x000000000004444c5dc75cB358380D2e3dE08A90",
+        "0x0000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000"
+      ],
+      "initCodeHash": "0x8d4a0c49e3250893fd9fb1688e3599eda92c12f5e60475ed6a1c4ac86ee1f747",
+      "address": "0x53bE1c465E69F3c9091a80F42B1AA95518581E98",
+      "method": "CREATE2",
+      "deployed": false
+    },
+    {
+      "contract": "VeylMarketDeployer",
+      "builder": "0x624E2F6d2C196b14A37d504C8404525B1BeD951c",
+      "salt": "0x000000000000000000000000Dca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+      "constructorArguments": [
+        "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+        "0x000000000004444c5dc75cB358380D2e3dE08A90",
+        "0x0000000000000000000000000000000000000000"
+      ],
+      "initCodeHash": "0x1769923990b36ac11ae5c547cbf0530b88daad5eb37e02afdfe8dce13f21c9e7",
+      "address": "0x8b0C2aD6cc0F1c515c2BBFA877C9FAAcb581cC61",
+      "method": "CREATE2",
+      "deployed": false
+    },
+    {
+      "contract": "VeylLiquidityDeployer",
+      "builder": "0x6136c29498De82B2270DD589B6D06a6Cb8f31646",
+      "salt": "0x000000000000000000000000Dca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+      "constructorArguments": [
+        "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+        "0x000000000004444c5dc75cB358380D2e3dE08A90"
+      ],
+      "initCodeHash": "0x37c7e7f5e2f53e05482377bc8a45f0daca7e3902f60072083aa148a11d820521",
+      "address": "0x2199b14a3B3Eb38854B8F8F9EB1066Fc07d70d7E",
+      "method": "CREATE2",
+      "deployed": false
+    }
+  ],
+  "token": {
+    "contract": "AgentToken",
+    "name": "Veyl",
+    "symbol": "VEYL",
+    "method": "CREATE2",
+    "from": "0x53bE1c465E69F3c9091a80F42B1AA95518581E98",
+    "initCodeHash": "0xcdaaee358a4d3aaad15c25d13499e1fa4ccdcc033e0391865ee982329e210574",
+    "address": "0x2eaB833d244352D4A7f8dC93285B1776F01954cB",
+    "deployed": false,
+    "status": "conditional-prediction",
+    "dependsOnLiquidityPriceOrBudget": false,
+    "launchSalt": "0x672a9aa9fcb689142afad0e644046d02e8713ac0718f81d7f72f22577e81be59",
+    "saltLabel": "veyl:ethereum:main-token:v1",
+    "marketId": "0x1a83b2c7e779dfe02bf739bec03961a0b2715796fddf44b75ef2be928692e2cf"
+  },
+  "artifacts": [
+    {
+      "contract": "VeylProjectDeployer",
+      "path": "contracts/out/VeylProjectDeployer.sol/VeylProjectDeployer.json",
+      "creationBytecodeKeccak256": "0xa94ab9baaaf487c3e5cf07e9bbfdd9e0092306f30249038e97c12846a063bf64"
+    },
+    {
+      "contract": "VeylMarketDeployer",
+      "path": "contracts/out/VeylMarketDeployer.sol/VeylMarketDeployer.json",
+      "creationBytecodeKeccak256": "0x5a8c3827d460df32cd57de0ab1f82869fa994517e4473ad415326f4a8e35c4b1"
+    },
+    {
+      "contract": "VeylLiquidityDeployer",
+      "path": "contracts/out/VeylLiquidityDeployer.sol/VeylLiquidityDeployer.json",
+      "creationBytecodeKeccak256": "0x56478429b31dfcd0f887feb305a518d11271b13b3fbbc4a1f624dd729675222a"
+    },
+    {
+      "contract": "AgentToken",
+      "path": "contracts/out/AgentKit.sol/AgentToken.json",
+      "creationBytecodeKeccak256": "0x0c8b00ce35e3864046867f412100f924433e9c079409e364a72b186025ea7a51"
+    }
+  ],
+  "requirements": [
+    "The same public deployer must CREATE the five contracts at the exact listed nonces and in this order, with no intervening transaction.",
+    "The factory must use the listed helpers, PoolManager, protocol recipient, native ETH quote and zero conversion router.",
+    "The token creator must be the listed creator and its treasury owner must match configured owner. The main token uses the published canonical launch salt, independent of workspace ID.",
+    "The compiled creation bytecode hashes must remain identical; rebuilding changed source or metadata can change CREATE2 addresses.",
+    "Predicted addresses do not show deployment, available liquidity, ownership or approval to spend."
+  ],
+  "missingForTokenPrediction": [],
+  "chainObservation": {
+    "checkedAt": "2026-10-02T01:46:39.471Z",
+    "rpcHost": "ethereum-rpc.publicnode.com",
+    "blockNumber": "26101443",
+    "confirmedNonce": 0,
+    "pendingNonce": 0,
+    "deployerHasCode": false,
+    "nonceSequenceCurrentlyPossible": true
+  }
+}

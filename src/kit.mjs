@@ -3,6 +3,7 @@ import { Problem, positive } from './agent.mjs';
 import { readSource, SOURCE_HOSTS } from './tools.mjs';
 import { FEE_ALLOCATION } from './economics.mjs';
 import { MODEL_OUTPUT_RESERVE_BYTES } from './store.mjs';
+import { accountingIdentity, applySettlement, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
 
 const templates = {
   research: { name: 'Research desk', role: 'Researcher', description: 'Turn supplied sources into a sourced brief and questions worth investigating.' },
@@ -19,7 +20,7 @@ export class Kit {
     this.store = store; this.provider = provider; this.providerForProject = providerForProject; this.providerCatalogForProject = providerCatalogForProject; this.fundingForProject = fundingForProject; this.queue = queue; this.agentTools = agentTools; this.prepareSocialDraft = prepareSocialDraft; this.chain = chain; this.markets = markets; this.funding = funding; this.now = now; this.running = false; this.operations = new Set();
   }
   project(id) { const result = this.store.data.projects.find(item => item.id === id); if (!result) throw new Problem('Project not found.', 404); return result; }
-  snapshot() { return { mode: this.provider.mode, busy: this.running, persistence: this.store.healthy ? 'healthy' : 'blocked', storage: this.store.storage(), templates, feeAllocation: FEE_ALLOCATION, sourceHosts: SOURCE_HOSTS, projects: this.store.data.projects, jobs: this.store.data.jobs.slice(-100), settlement: 'Live settlement reconciliation is not integrated; live caps stay reserved.', capabilities: { token: 'local-anvil', pools: this.markets ? 'local-uniswap-v4' : false, funding: this.funding?.capabilities() || null, publishing: false, inference: this.provider.mode === 'zkapi' ? 'local-zkapi-adapter' : 'simulation', fundingPrivacy: 'upstream zkAPI note-to-authorization link only; prompts are visible to the provider', settlementReconciliation: false, sourceReading: true } }; }
+  snapshot() { return { mode: this.provider.mode, busy: this.running, persistence: this.store.healthy ? 'healthy' : 'blocked', storage: this.store.storage(), templates, feeAllocation: FEE_ALLOCATION, sourceHosts: SOURCE_HOSTS, projects: this.store.data.projects, jobs: this.store.data.jobs.slice(-100), settlement: 'Pinned native receipts record exact ETH charges and ceiling USD valuations; unknown and legacy call caps remain held.', capabilities: { token: 'local-anvil', pools: this.markets ? 'local-uniswap-v4' : false, funding: this.funding?.capabilities() || null, publishing: false, inference: this.provider.mode === 'zkapi' ? 'local-zkapi-adapter' : 'simulation', fundingPrivacy: 'upstream zkAPI note-to-authorization link only; prompts are visible to the provider', settlementReconciliation: this.provider.mode === 'zkapi' ? 'authenticated-native-call-receipts' : false, sourceReading: true } }; }
   create(input) {
     this.store.assertHealthy();
     const requestKey = key(input.requestKey); const existing = this.store.data.projects.find(p => p.requestKey === requestKey);
@@ -136,11 +137,13 @@ export class Kit {
       const model = models.find(m => m.id === p.model);
       this.store.assertHealthy();
       if (!model) throw new Problem('Selected model is unavailable.');
-      const cap = positive(model.oa_request_limit_micro_usd, 'model cap');
+      const modelCap = positive(model.oa_request_limit_micro_usd, 'model cap');
+      const tracked = this.provider.mode === 'zkapi' && model.oa_accounting_margin_micro_usd === ACCOUNTING_MARGIN_MICRO_USD;
+      const cap = positive(modelCap + (tracked ? ACCOUNTING_MARGIN_MICRO_USD : 0), 'reserved model cap');
       const reservation = cap * roles.length, day = this.now().toISOString().slice(0, 10);
       if (cap > p.policy.request || reservation + p.committed > p.policy.total || reservation + (p.days[day] || 0) > p.policy.daily) throw new Problem('Budget cannot cover the entire task. Unsettled caps are not spendable.', 409);
       if (p.status !== 'active') throw new Problem('Project was paused before execution.', 409);
-      job = { id: randomUUID(), requestKey, projectId: id, prompt, model: p.model, mode: this.provider.mode, ...(this.queue ? { dispatch: 'scheduler' } : {}), status: 'queued', at: this.now().toISOString(), day, cap, reservation, storageReservationBytes: outputReservation, steps: roles.map(role => ({ role, status: 'queued' })), error: null };
+      job = { id: randomUUID(), requestKey, projectId: id, prompt, model: p.model, mode: this.provider.mode, ...(tracked ? { modelCap } : {}), ...(this.queue ? { dispatch: 'scheduler' } : {}), status: 'queued', at: this.now().toISOString(), day, cap, reservation, storageReservationBytes: outputReservation, steps: roles.map(role => ({ role, status: 'queued' })), error: null };
       this.store.assertCapacity(outputReservation + serializedBytes(job) + 8192);
       p.committed += reservation; p.days[day] = (p.days[day] || 0) + reservation;
       this.store.data.jobs.push(job); this.event(p, 'task', `Task accepted; ${roles.length} stage(s) budgeted.`); this.store.save();
@@ -184,7 +187,7 @@ export class Kit {
       if (!provider || provider.mode !== job.mode) throw new Problem('The project runtime changed before dispatch.', 503);
       const models = await provider.models(), model = models.find(item => item.id === job.model);
       this.store.assertHealthy();
-      if (!model || positive(model.oa_request_limit_micro_usd, 'live model cap') > job.cap) throw new Problem('The live model spending cap exceeds the saved reservation or the model is unavailable.', 409);
+      if (!model || positive(model.oa_request_limit_micro_usd, 'live model cap') > (job.modelCap ?? job.cap) || (job.modelCap !== undefined && model.oa_request_limit_micro_usd !== job.modelCap) || (model.oa_accounting_margin_micro_usd !== undefined && job.modelCap === undefined)) throw new Problem('The live model spending cap exceeds or differs from the saved reservation or the model is unavailable.', 409);
       if (p.status !== 'active' || p.model !== job.model) throw new Problem('Project changed before dispatch.', 409);
       this.execution = this.execute(p, job, provider); await this.execution; return job;
     } catch (error) {
@@ -250,7 +253,28 @@ export class Kit {
         p.committed += job.cap; p.days[day] = (p.days[day] || 0) + job.cap; job.reservation += job.cap;
         this.store.save();
       }
-      const result = await provider.complete({ model: job.model || p.model, messages, stream: false, max_tokens: 1600, ...(tools ? { tools: tools.schemas(), tool_choice: round === 3 ? 'none' : 'auto', parallel_tool_calls: false } : {}) });
+      const body = { model: job.model || p.model, messages, stream: false, max_tokens: 1600, ...(tools ? { tools: tools.schemas(), tool_choice: round === 3 ? 'none' : 'auto', parallel_tool_calls: false } : {}) };
+      const target = additional || step;
+      let context;
+      if (job.modelCap !== undefined) {
+        if (typeof provider.accountingIdentity !== 'function' || typeof provider.callSettlement !== 'function') throw new Problem('The runtime lacks durable per-call accounting. No inference was sent.', 503);
+        const identity = accountingIdentity(await provider.accountingIdentity());
+        this.store.assertHealthy();
+        if (p.status !== 'active') throw new Problem('Paused before durable inference admission. No model call was sent.', 409);
+        if (p.accountingJournalId && p.accountingJournalId !== identity.journal_id) throw new Problem('The runtime accounting journal changed. No inference was sent.', 503);
+        p.accountingJournalId ||= identity.journal_id;
+        target.callAccounting = { version: 1, callId: randomUUID(), journalId: identity.journal_id, requestHash: createHash('sha256').update(JSON.stringify(body)).digest('hex'), createdAt: Math.floor(+this.now() / 1000), modelCapMicroUsd: job.modelCap, reservedMicroUsd: job.cap, status: 'pending' };
+        this.store.save();
+        context = { callId: target.callAccounting.callId, journalId: identity.journal_id, reservedMicroUsd: job.cap };
+      }
+      let result;
+      try { result = await provider.complete(body, context); }
+      finally {
+        if (context && this.store.healthy) {
+          try { await this.reconcileCall(p, job, target, provider); }
+          catch { this.store.assertHealthy(); /* Ambiguity retains the durable cap. */ }
+        }
+      }
       if (additional) { additional.status = 'completed'; this.store.save(); }
       const calls = result?.toolCalls || [];
       if (!calls.length) return result;
@@ -271,6 +295,50 @@ export class Kit {
       }
     }
     throw new Problem('No final answer within the tool-call limit.', 502);
+  }
+  accountingCalls(projectId) {
+    return this.store.data.jobs.filter(job => job.projectId === projectId).flatMap(job => job.steps.flatMap(step => [step, ...(step.additionalCalls || [])].filter(target => target.callAccounting).map(target => ({ job, target }))));
+  }
+  pendingAccounting(projectId) { return this.accountingCalls(projectId).filter(({ target }) => target.callAccounting.status !== 'settled').length; }
+  async reconcileCall(p, job, target, provider) {
+    this.store.assertHealthy();
+    const callId = target.callAccounting.callId;
+    const raw = await provider.callSettlement(callId);
+    this.store.assertHealthy();
+    const call = target.callAccounting;
+    if (call.callId !== callId) throw new Problem('Accounting identity changed during recovery. Reservation retained.', 502);
+    // Validate on a copy: malformed or reused receipts cannot mutate memory or
+    // free allowance before the complete ledger has passed Store validation.
+    const next = structuredClone(call), released = applySettlement(next, raw);
+    for (const { target: other } of this.store.data.projects.flatMap(project => this.accountingCalls(project.id))) {
+      if (other === target || other.callAccounting.journalId !== next.journalId) continue;
+      if (next.report?.binding?.session_id && next.report.binding.session_id === other.callAccounting.report?.binding?.session_id) throw new Problem('A session is already bound to another model call. Reservation retained.', 502);
+      if (next.report?.receipt?.receipt_id && next.report.receipt.receipt_id === other.callAccounting.report?.receipt?.receipt_id) throw new Problem('A receipt is already bound to another model call. Reservation retained.', 502);
+    }
+    if (JSON.stringify(next) === JSON.stringify(call)) return false;
+    target.callAccounting = next;
+    p.committed -= released; p.days[target.day ?? job.day] -= released; job.reservation -= released;
+    this.store.save();
+    return next.status === 'settled';
+  }
+  async reconcileCalls(projectId, provider, { limit = 8 } = {}) {
+    this.store.assertHealthy();
+    if (!Number.isInteger(limit) || limit < 1 || limit > 8) throw new Problem('Invalid accounting recovery batch.');
+    const p = this.project(projectId), identity = accountingIdentity(await provider.accountingIdentity());
+    if (identity.journal_id !== p.accountingJournalId) throw new Problem('Accounting recovery journal does not match this project.', 503);
+    const pending = this.accountingCalls(projectId).filter(({ target }) => target.callAccounting.status !== 'settled');
+    // Rotate a durable cursor so one permanently unknown record cannot starve
+    // newer settled calls, including after eviction/restart.
+    const offset = (p.accountingRecoveryCursor || 0) % Math.max(1, pending.length);
+    const batch = [...pending.slice(offset), ...pending.slice(0, offset)].slice(0, limit);
+    let settled = 0;
+    let checked = 0;
+    for (const { job, target } of batch) {
+      checked++; p.accountingRecoveryCursor = (offset + checked) % pending.length; this.store.save();
+      try { if (await this.reconcileCall(p, job, target, provider)) settled++; }
+      catch (error) { this.store.assertHealthy(); if (error?.daemonUnavailable) break; }
+    }
+    return { checked, settled, pending: this.pendingAccounting(projectId) };
   }
   async tick() {
     this.store.assertHealthy();

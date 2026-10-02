@@ -76,3 +76,17 @@ test('zkAPI preserves bounded offered function calls without pretending they are
     await assert.rejects(bad.complete({ tools: [{ type: 'function', function: { name: 'read_source' } }] }), e => e.status === 502 && /Budget stays reserved/.test(e.message));
   }
 });
+test('tracked provider admission stays in authenticated local headers and never provider JSON', async () => {
+  const calls = [], callId = 'a0000000-0000-4000-8000-000000000001', journalId = 'a'.repeat(32);
+  const provider = new ZkApiProvider({ key: 'local-fixture', fetcher: async (url, options) => {
+    const path = new URL(url).pathname; calls.push(path); assert.equal(options.headers.Authorization, 'Bearer local-fixture');
+    if (path === '/v1/accounting') return new Response(JSON.stringify({ version: 1, journal_id: journalId }));
+    if (path.includes('/call-settlements/')) return new Response(JSON.stringify({ version: 1, journal_id: journalId, call_id: callId, status: 'reserved' }));
+    assert.equal(options.headers['X-Veyl-Call-Id'], callId); assert.equal(options.headers['X-Veyl-Journal-Id'], journalId); assert.equal(options.headers['X-Veyl-Reserved-Micro-Usd'], '1001000');
+    assert.deepEqual(JSON.parse(options.body), { model: 'fixture' }); return new Response(JSON.stringify(answer));
+  } });
+  assert.equal((await provider.accountingIdentity()).journal_id, journalId);
+  await provider.complete({ model: 'fixture' }, { callId, journalId, reservedMicroUsd: 1001000 });
+  assert.equal((await provider.callSettlement(callId)).status, 'reserved'); assert.equal(calls.length, 3);
+  await assert.rejects(provider.complete({}, { callId, journalId, reservedMicroUsd: 1.5 }), /accounting context/); assert.equal(calls.length, 3);
+});

@@ -193,7 +193,7 @@ test('daemon rejects malformed and ambiguous catalogs without trusting missing c
     await assert.rejects(provider.models(), error => error.status === 502); assert.equal(calls, 1);
   }
   const provider = new ZkApiProvider({ fetcher: async () => new Response(JSON.stringify({ data: [model] })) });
-  assert.deepEqual(await provider.models(), [model]);
+  assert.deepEqual(await provider.models(), [{ ...model, oa_accounting_margin_micro_usd: 1000 }]);
 });
 
 test('daemon rejects oversized or non-text responses and never upgrades missing verification', async () => {

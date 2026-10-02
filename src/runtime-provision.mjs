@@ -26,7 +26,12 @@ export class RuntimeProvisioner {
     this.maxPerOwner = maxPerOwner; this.binaryIdentityVerified = false;
     if (this.available && manifest) {
       const identity = JSON.parse(readFileSync(manifest, 'utf8')), digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
-      if (identity.version !== 1 || identity.sourceRevision !== ZKAPI_SOURCE_REVISION || identity.patch !== 'VEYL_UNFUNDED_CONTROL_V1' || identity.clientSha256 !== digest(executable) || identity.walletSha256 !== digest(walletBinary) || identity.proofManifestSha256 !== digest(resolve(proofSetupDir, 'manifest.json'))) throw new Error('Runtime binary identity differs from the installed build manifest.');
+      let reviewed = identity.version === 1 && identity.patch === 'VEYL_UNFUNDED_CONTROL_V1';
+      if (identity.version === 2 && identity.patch === 'VEYL_CALL_ACCOUNTING_V1') {
+        const sourceLock = new URL('../deployment/native/source-lock.json', import.meta.url), lock = JSON.parse(readFileSync(sourceLock, 'utf8'));
+        reviewed = identity.sourceLockSha256 === digest(sourceLock) && identity.companionRevision === lock.companionRevision && identity.protocolRevision === lock.protocolRevision && lock.daemonRevision === ZKAPI_SOURCE_REVISION;
+      }
+      if (!reviewed || identity.sourceRevision !== ZKAPI_SOURCE_REVISION || identity.clientSha256 !== digest(executable) || identity.walletSha256 !== digest(walletBinary) || identity.proofManifestSha256 !== digest(resolve(proofSetupDir, 'manifest.json'))) throw new Error('Runtime binary identity differs from the installed build manifest.');
       this.binaryIdentityVerified = true;
     }
   }

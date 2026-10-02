@@ -1,4 +1,5 @@
 import { Problem, positive } from './agent.mjs';
+import { accountingIdentity, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
 
 // Interface review pin, not a claim that the local daemon's binary is attested.
 export const ZKAPI_SOURCE_REVISION = 'b826c169b4831665822529f535f824265f50630b';
@@ -25,16 +26,16 @@ export class ZkApiProvider {
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Problem('zkAPI must use an HTTP 127.0.0.1 daemon origin without a path.');
     this.base = url.origin; this.key = key; this.fetcher = fetcher;
   }
-  async request(path, body) {
+  async request(path, body, localHeaders = {}) {
     try {
       const response = await this.fetcher(this.base + path, { method: body ? 'POST' : 'GET', redirect: 'error',
-        headers: { 'Content-Type': 'application/json', ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}) },
+        headers: { 'Content-Type': 'application/json', ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}), ...localHeaders },
         body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(body ? 180_000 : 15_000) });
-      if (!response.ok) { await response.body?.cancel(); throw new Problem(`zkAPI returned HTTP ${response.status}. Check the daemon locally; requests are never automatically retried.`, 502); }
+      if (!response.ok) { await response.body?.cancel(); const error = new Problem(`zkAPI returned HTTP ${response.status}. Check the daemon locally; requests are never automatically retried.`, 502); error.daemonUnavailable = response.status !== 404; throw error; }
       const reader = response.body.getReader(); const chunks = []; let size = 0;
       while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 2_000_000) { await reader.cancel(); throw new Problem('Daemon response too large.', 502); } chunks.push(value); }
       return { data: JSON.parse(Buffer.concat(chunks).toString('utf8')), headers: response.headers };
-    } catch (error) { throw error instanceof Problem ? error : new Problem('Cannot read the local zkAPI daemon response. Check its configuration and recovery state.', 502); }
+    } catch (error) { if (error instanceof Problem) throw error; const failure = new Problem('Cannot read the local zkAPI daemon response. Check its configuration and recovery state.', 502); failure.daemonUnavailable = true; throw failure; }
   }
   async models() {
     const { data } = await this.request('/v1/models');
@@ -45,7 +46,7 @@ export class ZkApiProvider {
       let cap;
       try { cap = positive(item.oa_request_limit_micro_usd, 'daemon model cap'); }
       catch { throw new Problem('Daemon model lacks a valid request cap; inference is blocked.', 502); }
-      seen.add(item.id); return { id: item.id, oa_request_limit_micro_usd: cap };
+      seen.add(item.id); return { id: item.id, oa_request_limit_micro_usd: cap, oa_accounting_margin_micro_usd: ACCOUNTING_MARGIN_MICRO_USD };
     });
   }
   async diagnostics({ expectedNetwork = 'mainnet' } = {}) {
@@ -68,8 +69,22 @@ export class ZkApiProvider {
     if (status?.backend !== 'zkapi' || status.network !== expectedNetwork || status.request_budget_policy !== 'model') throw new Problem('Daemon metadata does not match the expected zkAPI network and model budget policy.', 502);
     return { ...report, configuration: 'daemon-reported match', backend: 'zkapi', network: status.network, requestBudgetPolicy: 'model' };
   }
-  async complete(body) {
-    const { data, headers } = await this.request('/v1/chat/completions', body);
+  async accountingIdentity() {
+    if (!this.key) throw new Problem('Authenticated per-call accounting is required before inference.', 503);
+    return accountingIdentity((await this.request('/v1/accounting')).data);
+  }
+  async callSettlement(callId) {
+    if (!this.key || typeof callId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(callId)) throw new Problem('Invalid accounting lookup.', 503);
+    return (await this.request('/v1/call-settlements/' + callId)).data;
+  }
+  async complete(body, accounting) {
+    const localHeaders = {};
+    if (accounting) {
+      const { callId, reservedMicroUsd, journalId } = accounting;
+      if (!this.key || typeof callId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(callId) || !/^[0-9a-f]{32}$/.test(journalId) || !Number.isSafeInteger(reservedMicroUsd) || reservedMicroUsd < 1 || reservedMicroUsd > 1_000_000_000) throw new Problem('Invalid durable accounting context.', 503);
+      Object.assign(localHeaders, { 'X-Veyl-Call-Id': callId, 'X-Veyl-Journal-Id': journalId, 'X-Veyl-Reserved-Micro-Usd': String(reservedMicroUsd) });
+    }
+    const { data, headers } = await this.request('/v1/chat/completions', body, localHeaders);
     const message = data?.choices?.[0]?.message;
     const answer = message?.content;
     const offered = new Set((Array.isArray(body.tools) ? body.tools : []).filter(tool => tool?.type === 'function').map(tool => tool.function?.name));

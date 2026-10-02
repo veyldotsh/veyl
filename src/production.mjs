@@ -43,13 +43,15 @@ export class TenantRegistry {
     this.feeKeeper = feeKeeper; this.lastFeeTick = 0;
     this.treasuryOperator = treasuryOperator; this.lastRunwayTick = 0;
     this.conversionKeeper = conversionKeeper; this.lastConversionTick = 0;
+    this.lastAccountingTick = 0;
     this.financeContext = new AsyncLocalStorage(); this.financeOwners = new Map();
     // Startup capabilities are immutable for this registry. A saved daemon
     // profile is an identity binding, never authority to enable transactions.
     this.approvalEnabled = fundingSettings.transactionsEnabled === true && fundingSettings.approvalEnabled === true;
-    this.maintenance = new SealedState(resolve(this.directory, 'maintenance.sealed.json'), key, 'maintenance-cursors', { version: 1, feeOwner: null, runwayOwner: null, conversionOwner: null });
+    this.maintenance = new SealedState(resolve(this.directory, 'maintenance.sealed.json'), key, 'maintenance-cursors', { version: 1, feeOwner: null, runwayOwner: null, conversionOwner: null, accountingOwner: null });
     if (this.maintenance.data.conversionOwner === undefined) this.maintenance.data.conversionOwner = null;
-    if (this.maintenance.data.version !== 1 || ['feeOwner', 'runwayOwner', 'conversionOwner'].some(field => this.maintenance.data[field] !== null && !/^0x[a-f0-9]{40}$/.test(this.maintenance.data[field] || ''))) throw new Error('Invalid maintenance cursor state.');
+    if (this.maintenance.data.accountingOwner === undefined) this.maintenance.data.accountingOwner = null;
+    if (this.maintenance.data.version !== 1 || ['feeOwner', 'runwayOwner', 'conversionOwner', 'accountingOwner'].some(field => this.maintenance.data[field] !== null && !/^0x[a-f0-9]{40}$/.test(this.maintenance.data[field] || ''))) throw new Error('Invalid maintenance cursor state.');
     this.maxLoadedTenants = maxLoadedTenants; this.pins = new Map(); this.backgroundOwners = new Map(); this.tenantTouches = new Map(); this.scanIndex = 0;
     if (![maxTenants, maxLoadedTenants].every(n => Number.isSafeInteger(n) && n > 0) || maxLoadedTenants > maxTenants) throw new Error('Invalid tenant capacity.');
     this.owners = new Set(readdirSync(this.directory, { withFileTypes: true }).filter(e => e.isDirectory() && /^0x[a-f0-9]{40}$/.test(e.name)).map(e => e.name));
@@ -164,11 +166,11 @@ export class TenantRegistry {
       if (!this.configuration.data.projects.some(p => p.owner.toLowerCase() === owner.toLowerCase() && p.projectId === projectId)) await this.prepareProject(owner, kit.project(projectId));
       lease = await this.provisioner.acquire(owner, projectId);
       const runtime = this.runtime(owner, projectId), raw = runtime.rawProvider;
-      return { mode: raw.mode, models: raw.models.bind(raw), complete: async input => {
+      return { mode: raw.mode, models: raw.models.bind(raw), accountingIdentity: () => raw.accountingIdentity(), callSettlement: callId => raw.callSettlement(callId), complete: async (input, accountingContext) => {
         this.resources.assertCapacity();
         try { runtime.noteExpiry = await runtime.noteExpiryGuard.assertCanInfer(); }
         catch (error) { if (error.noteExpiry) runtime.noteExpiry = error.noteExpiry; throw error; }
-        return raw.complete(input);
+        return raw.complete(input, accountingContext);
       }, release };
     } catch (error) { release(); throw error; }
   }
@@ -256,6 +258,27 @@ export class TenantRegistry {
     } catch (error) { project.runwayMaintenance = { checkedAt: this.now().toISOString(), status: 'blocked', error: error instanceof Problem ? error.message : 'Automatic funding stopped; inspect its saved recovery state.' }; }
     kit.store.save();
   }
+  async tickAccounting(owner, kit) {
+    const now = +this.now();
+    if (now - this.lastAccountingTick < 60000 || kit.running || !this.claimMaintenanceOwner('accountingOwner', owner)) return;
+    const project = kit.store.data.projects.filter(p => !kit.operations.has(p.id)
+      && !kit.store.data.jobs.some(job => job.projectId === p.id && job.status === 'running')
+      && (!p.accountingMaintenance?.checkedAt || now - +new Date(p.accountingMaintenance.checkedAt) >= 60000)
+      && kit.pendingAccounting(p.id) > 0)
+      .sort((a, b) => (+new Date(a.accountingMaintenance?.checkedAt || 0) - +new Date(b.accountingMaintenance?.checkedAt || 0)) || a.id.localeCompare(b.id))[0];
+    if (!project) return;
+    // A single bounded recovery batch per minute. This reads saved receipts,
+    // including interrupted jobs, and never retries an inference request.
+    this.lastAccountingTick = now;
+    try {
+      const result = await this.financialOperation(owner, project.id, () => this.provisioner.withRuntime(owner, project.id, async () => {
+        this.resources.assertCapacity();
+        return kit.reconcileCalls(project.id, this.runtime(owner, project.id).rawProvider, { limit: 8 });
+      }), 'accounting-reconciliation');
+      project.accountingMaintenance = { checkedAt: this.now().toISOString(), status: result.pending ? 'pending' : 'settled', checked: result.checked, settled: result.settled, pending: result.pending };
+    } catch { project.accountingMaintenance = { checkedAt: this.now().toISOString(), status: 'blocked', error: 'Charge reconciliation is unavailable. Unresolved reservations remain held.' }; }
+    kit.store.save();
+  }
   async ready(owner, projectId) {
     const project = this.get(owner).project(projectId);
     if (!this.provisioner.children.has(projectId)) return this.provision(owner, project);
@@ -329,6 +352,7 @@ export class TenantRegistry {
         await this.tickFees(owners.find(owner => this.kits.get(owner) === kit), kit);
         await this.tickConversions(owners.find(owner => this.kits.get(owner) === kit), kit);
         await this.tickRunways(owners.find(owner => this.kits.get(owner) === kit), kit);
+        await this.tickAccounting(owners.find(owner => this.kits.get(owner) === kit), kit);
         if (!kit.store.data.workerHeartbeat || +this.now() - +new Date(kit.store.data.workerHeartbeat.checkedAt) >= 30_000) {
           const checkedAt = this.now().toISOString(); kit.store.data.workerHeartbeat = { checkedAt, status: 'online' };
           for (const project of kit.store.data.projects) project.runtimeHeartbeat = { checkedAt, worker: 'online', daemon: this.provisioner.children.has(project.id) ? 'running' : 'stopped', executing: kit.running && kit.store.data.jobs.some(j => j.projectId === project.id && j.status === 'running') };
