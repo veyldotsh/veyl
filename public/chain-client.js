@@ -10,11 +10,11 @@ export class VeylChainClient extends EventTarget {
     this.pendingKey = 'veyl:ethereum:pending:v1'; this.busy = false;
     wallet.addEventListener('change', () => this.dispatchEvent(new Event('change')));
   }
-  path(projectId, action) { return `/api/projects/${encodeURIComponent(projectId)}/mainnet/${action}`; }
+  path(projectId, action) { return projectId === 'platform-market' ? `/api/platform-market/${action}` : `/api/projects/${encodeURIComponent(projectId)}/mainnet/${action}`; }
   async capabilities(projectId) { return projectId ? this.api(this.path(projectId, 'capabilities')) : this.api('/api/mainnet/capabilities'); }
   async status(projectId) {
     const account = this.wallet.account;
-    return this.api(this.path(projectId, 'status') + (account ? `?account=${encodeURIComponent(account)}` : ''));
+    return this.api(this.path(projectId, 'status') + (account && projectId !== 'platform-market' ? `?account=${encodeURIComponent(account)}` : ''));
   }
   async prepare(projectId, action, input = {}) {
     if (!this.wallet.account) throw new Error('Connect your wallet first.');

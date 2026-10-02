@@ -28,6 +28,7 @@ import { ConversionKeeper } from './conversion-keeper.mjs';
 import { loadConversionOperator } from './conversion-operator.mjs';
 import { DeveloperKeys } from './developer-auth.mjs';
 import { developerRequest } from './developer-api.mjs';
+import { configuredPlatformMarket } from './platform-market.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 class UnconfiguredProvider {
@@ -365,7 +366,7 @@ export class TenantRegistry {
   }
 }
 
-export function createProductionApp({ auth, registry, gateway, origin, mainnet, transactionsEnabled = false }) {
+export function createProductionApp({ auth, registry, gateway, origin, mainnet, transactionsEnabled = false, platformMarket = configuredPlatformMarket(mainnet) }) {
   const rates = new Map();
   const rateLimit = address => {
     const now = Date.now();
@@ -399,6 +400,11 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
         const result = await developerRequest({ identity, method: req.method, url, body, registry, kit: tenantLease.kit });
         return json(result.status, result.body);
       }
+      if (path === '/api/market' && req.method === 'GET') {
+        if (url.search) throw new Problem('The public market endpoint does not accept parameters.', 400);
+        rateLimit('public-market:' + client);
+        return json(200, await platformMarket.publicSnapshot(transactionsEnabled));
+      }
       if (path === '/api/session' && req.method === 'GET') {
         const session = auth.session(cookie);
         return json(200, { mode: 'production', authenticated: !!session, ...(session ? { address: session.address, csrf: session.csrf } : {}) });
@@ -412,6 +418,13 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
       if (path === '/api/auth/logout' && req.method === 'POST') { auth.logout(cookie, req.headers['x-agent-csrf']); res.setHeader('Set-Cookie', sessionCookie('', 0)); return json(200, { loggedOut: true }); }
       rateLimit(session.address);
       tenantLease = registry.pin(session.address); const kit = tenantLease.kit, checkpoint = () => kit.store.save();
+      if (parts[0] === 'api' && parts[1] === 'platform-market') {
+        if (url.search || parts.length !== 3) throw new Problem('Platform market endpoint not found.', 404);
+        if (req.method === 'GET' && parts[2] === 'status') return json(200, await platformMarket.status(kit, session.address));
+        if (req.method === 'GET' && parts[2] === 'capabilities') return json(200, { ...platformMarket.capabilities(), transactionsEnabled });
+        if (req.method === 'POST' && ['quote', 'swap', 'maintenance', 'verify'].includes(parts[2])) return json(200, await platformMarket.execute(kit, session.address, parts[2], body, transactionsEnabled));
+        throw new Problem('Platform market endpoint not found.', 404);
+      }
       if (path === '/api/state' && req.method === 'GET') {
         const state = kit.snapshot();
         return json(200, { ...state, hosted: true, wallet: session.address, csrf: session.csrf, queue: registry.scheduler.snapshot(session.address), workerHeartbeat: kit.store.data.workerHeartbeat || null, capabilities: { ...state.capabilities, token: 'ethereum-user-signed', pools: 'ethereum-uniswap-v4', inference: 'per-project-zkapi', publishing: false, transactionsEnabled }, runtimeProjects: kit.store.data.projects.map(p => ({ projectId: p.id, state: p.runtimeProvision?.state || 'not-provisioned', running: registry.provisioner.children.has(p.id), configured: registry.configuration.data.projects.some(c => c.owner.toLowerCase() === session.address.toLowerCase() && c.projectId === p.id) })) });

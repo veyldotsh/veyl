@@ -78,7 +78,12 @@ export function createApp(kit) {
       const assets = { '/': ['site.html', 'text/html'], '/app': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/site.js': ['site.js', 'text/javascript'], '/site.css': ['site.css', 'text/css'], '/fonts.css': ['fonts.css', 'text/css'], '/field.svg': ['field.svg', 'image/svg+xml'], '/docs': ['docs.html', 'text/html'], '/docs.css': ['docs.css', 'text/css'], '/brand': ['brand.html', 'text/html'], '/logo.svg': ['logo.svg', 'image/svg+xml'], '/logo-light.svg': ['logo-light.svg', 'image/svg+xml'], '/logo-mono.svg': ['logo-mono.svg', 'image/svg+xml'] };
       assets['/developers'] = ['developers.html', 'text/html'];
       assets['/oauth/x'] = ['oauth-callback.html', 'text/html'];
-      for (const file of ['site.html', 'index.html', 'docs.html', 'developers.html', 'brand.html', 'oauth-callback.html']) assets[`/${file}`] = [file, 'text/html'];
+      assets['/market'] = ['market.html', 'text/html'];
+      assets['/market.css'] = ['market.css', 'text/css'];
+      assets['/market.js'] = ['market.js', 'text/javascript'];
+      assets['/ambient.css'] = ['ambient.css', 'text/css'];
+      assets['/ambient-fold.svg'] = ['ambient-fold.svg', 'image/svg+xml'];
+      for (const file of ['site.html', 'index.html', 'docs.html', 'developers.html', 'brand.html', 'oauth-callback.html', 'market.html']) assets[`/${file}`] = [file, 'text/html'];
       assets['/developer-panel.css'] = ['developer-panel.css', 'text/css'];
       assets['/docs.js'] = ['docs.js', 'text/javascript'];
       assets['/panels.js'] = ['panels.js', 'text/javascript'];

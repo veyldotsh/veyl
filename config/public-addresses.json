@@ -409,7 +409,7 @@
     "blockNumber": "26101827",
     "runtimeContractsVerified": 14,
     "reviewDigest": "35740355a0f1cc4aad9d9833999f7421be5398657825e079f9077a3fc6e247b5",
-    "explorerVerificationSubmitted": false
+    "explorerVerificationSubmitted": true
   },
   "positionAtDeployment": {
     "positionManager": "0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e",
@@ -418,5 +418,16 @@
     "seededTokens": "980000000000000000000012538",
     "liquidity": "43827373799693085948824",
     "sentToDead": false
+  },
+  "liquidityLock": {
+    "chainId": 1,
+    "positionManager": "0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e",
+    "positionId": "429089",
+    "owner": "0x000000000000000000000000000000000000dEaD",
+    "transactionHash": "0xbc0ee82c2c66685789feaea923a175bfa452f97fd858a2c00d5cf443e6c0e5c1",
+    "blockNumber": "26102004",
+    "blockHash": "0xb7a10c31a0a996942afc11f8af27dd73a05ec7cb3fcc0995710b1659dae0fde0",
+    "liquidity": "43827373799693085948824",
+    "hookFeesUnaffected": true
   }
 }

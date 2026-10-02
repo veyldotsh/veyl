@@ -1,4 +1,4 @@
-let hostedSession = null, chainClient = null, mainnetPanel = null, walletEventsBound = false, socialPanel = null, socialPanelGeneration = 0, runwayPanel = null, runwayPanelGeneration = 0, developerPanel = null, developerPanelGeneration = 0;
+let hostedSession = null, chainClient = null, mainnetPanel = null, mainnetPanelGeneration = 0, walletEventsBound = false, socialPanel = null, socialPanelGeneration = 0, runwayPanel = null, runwayPanelGeneration = 0, developerPanel = null, developerPanelGeneration = 0;
 async function sessionBootstrap() {
   const response = await fetch('/api/session');
   if (!response.ok) throw new Error('The Veyl runtime is unavailable. Please try again shortly.');
@@ -17,7 +17,7 @@ async function sessionBootstrap() {
   return true;
 }
 function renderSignIn(message = '') {
-  socialPanel?.destroy(); socialPanel = null; socialPanelGeneration++; mainnetPanel?.destroy(); mainnetPanel = null;
+  socialPanel?.destroy(); socialPanel = null; socialPanelGeneration++; mainnetPanel?.destroy(); mainnetPanel = null; mainnetPanelGeneration++;
   runwayPanel?.destroy(); runwayPanel = null; runwayPanelGeneration++;
   developerPanel?.destroy(); developerPanel = null; developerPanelGeneration++;
   state = null;
@@ -25,7 +25,7 @@ function renderSignIn(message = '') {
   $('project-nav').innerHTML = ''; $('job-count').textContent = '0';
   $('mode').textContent = 'PRIVATE WORKSPACE'; $('runtime-status').textContent = 'Sign in to continue';
   $('wallet-control').textContent = 'Connect wallet'; $('chain-label').textContent = 'Ethereum';
-  $('content').innerHTML = `<section class="signin-panel"><img src="/logo.svg" alt="" width="64" height="64"><p class="eyebrow">YOUR IDEAS HAVE A HOME.</p><h1>Welcome to Veyl.</h1><p>One workspace for your agents, their memory and the work they deliver.</p><button class="button" data-signin>Connect & sign in ↗</button><p class="hint">Sign an ownership message with your Ethereum wallet. Signing in costs no gas and sends no transaction.</p>${message ? `<p class="error" role="alert">${esc(message)}</p>` : ''}<a class="text-link" href="/docs#start">Get to know Veyl →</a></section>`;
+  $('content').innerHTML = `<section class="signin-panel"><img src="/logo.svg" alt="" width="64" height="64"><p class="eyebrow">YOUR IDEAS HAVE A HOME.</p><h1>Welcome to Veyl.</h1><p>One workspace for your agents, their memory and the work they deliver.</p><button class="button" data-signin>Connect & sign in ↗</button><p class="hint">Sign an ownership message with your Ethereum wallet. Signing in costs no gas and sends no transaction.</p>${message ? `<p class="error" role="alert">${esc(message)}</p>` : ''}<a class="text-link" href="/market">View the public VEYL market →</a><br><a class="text-link" href="/docs#start">Get to know Veyl →</a></section>`;
 }
 async function signIn(button) {
   button.disabled = true;
@@ -75,10 +75,10 @@ function renderHostedTools() {
   return `<section class="overview-head"><div><p class="eyebrow">A CAPABLE WORKSPACE</p><h1>Tools, with clear boundaries.</h1><p>Funding and model settings live in each agent’s workspace.</p></div></section><div class="tool-grid">${items.map(([name, status, detail]) => `<article class="tool"><h3>${name}</h3><span class="tool-state">${status}</span><p>${detail}</p></article>`).join('')}</div>`;
 }
 async function loadMainnetPanel(p) {
-  const element = $('mainnet-panel'); if (!element) return;
+  const element = $('mainnet-panel'), generation = mainnetPanelGeneration; if (!element || !p) return;
   try {
     const { mountMainnetPanel } = await import('/mainnet-panel.js');
-    if (selected !== p.id || !$('mainnet-panel')) return;
+    if (generation !== mainnetPanelGeneration || $('mainnet-panel') !== element || !state || (view === 'platform' ? p.id !== 'platform-market' : selected !== p.id)) return;
     mainnetPanel = mountMainnetPanel(element, { project: p, api, client: chainClient, capabilities: state.capabilities, notify: toast, onChange: () => refresh() });
   } catch (error) { element.textContent = error.message; }
 }

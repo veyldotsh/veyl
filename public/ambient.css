@@ -1,0 +1,13 @@
+/* The banner's folded green form, kept behind every readable surface. */
+body{position:relative;isolation:isolate;min-height:100vh;--ambient-min:.10;--ambient-max:.15}
+body::before{content:"";position:fixed;inset:-4vh -4vw;z-index:-1;pointer-events:none;background:url('/ambient-fold.svg') right center/auto 112% no-repeat;opacity:.12;transform-origin:85% 55%;animation:veyl-ambient-fold 38s ease-in-out infinite alternate}
+body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(90deg,rgba(244,243,233,.65) 0%,rgba(244,243,233,.35) 48%,rgba(244,243,233,0) 85%)}
+body:has(.main-shell){--ambient-min:.06;--ambient-max:.10}
+body:has(.main-shell)::before{opacity:.09}
+body:has(.main-shell)::after{background:linear-gradient(90deg,rgba(246,247,243,.7),rgba(246,247,243,.2))}
+.site-nav,.site-footer{background:rgba(244,243,233,.68)}
+.market-stats{background:rgba(244,243,233,.8)}
+@keyframes veyl-ambient-fold{from{transform:translate3d(0,-8px,0) rotate(-1deg);opacity:var(--ambient-min)}to{transform:translate3d(-24px,12px,0) rotate(1deg);opacity:var(--ambient-max)}}
+@media(max-width:760px){body::before{inset:0;background-size:auto 100%;background-position:72% center;opacity:.09;animation:none}body::after{background:rgba(244,243,233,.15)}.documentation .nav-links,.identity .nav-links{display:flex}.documentation .nav-links>a:not([href="/market"]),.identity .nav-links>a:not([href="/market"]){display:none}.documentation .nav-links>a[href="/market"],.identity .nav-links>a[href="/market"]{display:inline-block}}
+@media(prefers-reduced-motion:reduce){body::before{animation:none;transform:none;opacity:.10}}
+@media print{body::before,body::after{display:none}}

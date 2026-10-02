@@ -34,7 +34,7 @@
     "tickSpacing": 1,
     "launchProtection": true,
     "initialSqrtPriceX96": "1771577727172025373304338615273325",
-    "liquidityCustodyPolicy": "The main VEYL position is a canonical Uniswap v4 NFT minted to the deployer, who can inspect and manually transfer it to the dead address. It is not locked while the deployer owns it. Agent-market positions continue to use permanently locked VeylLiquidityVault positions.",
+    "liquidityCustodyPolicy": "The main VEYL canonical Uniswap v4 position NFT #429089 was transferred to the dead address. Its liquidity remains in the pool and its separate hook fees remain collectible. The confirmed transaction is recorded in main-liquidity-lock.json. Agent markets use permanently locked VeylLiquidityVault positions without an owner withdrawal path.",
     "liquidityCustody": "deployer-position-nft"
   },
   "zkapi": {

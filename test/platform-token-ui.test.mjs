@@ -35,7 +35,7 @@ test('the canonical platform token opens its market without agent runtime or soc
 test('workspace lists the platform market separately and counts only agents', () => {
   const html = runInContext('renderHome();', app());
   assert.match(html, /PLATFORM TOKEN/);
-  assert.match(html, /Manage VEYL market/);
+  assert.match(html, /data-view="platform">Trade & view fees/);
   assert.match(html, /Your agents<\/span><strong>01<\/strong>/);
   assert.match(html, /1 ready agents/);
   assert.match(html, /\$RES · Solo agent/);

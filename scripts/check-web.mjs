@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 // Read-only HTTP audit of the actual local pages and their linked assets.
 const base = 'http://127.0.0.1:4318';
-const pages = ['/', '/app', '/docs', '/brand'];
+const pages = ['/', '/app', '/market', '/docs', '/brand'];
 const responses = new Map();
 async function read(path) {
   if (responses.has(path)) return responses.get(path);
@@ -29,7 +29,11 @@ for (let i = 0; i < references.length; i++) {
   const url = new URL(value.replaceAll('&amp;', '&'), base + from);
   if (url.origin !== base) continue;
   const { body, type } = await read(url.pathname);
-  if (url.hash) assert.ok(typeof body === 'string' && body.includes(`id="${url.hash.slice(1)}"`), `Anchor ${value} from ${from}`);
+  if (url.hash) {
+    const route = url.pathname === '/app' ? new URLSearchParams(url.hash.slice(1)) : null;
+    if (route?.has('view')) assert.ok(['home', 'project', 'jobs', 'tools', 'platform'].includes(route.get('view')), `Workspace route ${value}`);
+    else assert.ok(typeof body === 'string' && body.includes(`id="${url.hash.slice(1)}"`), `Anchor ${value} from ${from}`);
+  }
   if (type.startsWith('text/css')) {
     for (const match of body.matchAll(/url\(['"]?([^'"\)]+)['"]?\)/g)) {
       const asset = new URL(match[1], base + url.pathname);
