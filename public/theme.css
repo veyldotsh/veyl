@@ -1,5 +1,5 @@
-/* Theme is optional. Existing light surfaces retain their original palette. */
-html{color-scheme:light}
+/* Veyl uses one dark palette across the site and workspace. */
+html{color-scheme:dark;background:#112019}
 html[data-theme="dark"]{color-scheme:dark;background:#112019}
 html[data-theme="dark"] body{
   --paper:#112019;--bg:#112019;--surface:#1a2d22;--ink:#edf2e5;
@@ -11,22 +11,12 @@ html[data-theme="dark"] body{
 html[data-theme="dark"] ::selection{background:#c9e596;color:#17271c}
 html[data-theme="dark"] :is(a,button,summary,input,textarea,select):focus-visible{outline-color:#c9e596}
 
-/* Two separate, keyboard-accessible controls share the safe viewport corner. */
-button.veyl-theme-control{all:unset;box-sizing:border-box;position:fixed;right:70px;right:calc(max(16px,env(safe-area-inset-right)) + 54px);bottom:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:8;display:grid;place-items:center;width:44px;height:44px;color:#34533d;background:#f4f3e9;border:1px solid #cad5be;border-radius:50%;box-shadow:0 3px 12px #182a210b;cursor:pointer;transition:background .18s,border-color .18s}
-button.veyl-theme-control:hover{background:#e5ebdb;border-color:#809674}
-button.veyl-theme-control:focus-visible{outline:2px solid #35553b;outline-offset:4px}
-.veyl-theme-control svg{display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-.veyl-theme-control .theme-sun{display:none}
-.veyl-theme-control[aria-pressed="true"] .theme-moon{display:none}
-.veyl-theme-control[aria-pressed="true"] .theme-sun{display:block}
-.veyl-theme-control::after{content:attr(data-tip);position:absolute;right:0;bottom:54px;width:max-content;max-width:calc(100vw - 90px);background:#182a21;color:#f4f3e9;padding:6px 10px;border-radius:3px;font:10px/1.5 system-ui,sans-serif;opacity:0;pointer-events:none;transition:opacity .18s}
-.veyl-theme-control:hover::after,.veyl-theme-control:focus-visible::after{opacity:1}
-/* Motion's tooltip also sits above the controls, never over its neighbour. */
+/* The motion control stays available independently of the fixed theme. */
 .veyl-motion-control::after{right:0;bottom:54px}
-html[data-theme="dark"] button:is(.veyl-theme-control,.veyl-motion-control){background:#203526;color:#d1e8aa;border-color:#647c55;box-shadow:0 3px 12px #0003}
-html[data-theme="dark"] button:is(.veyl-theme-control,.veyl-motion-control):hover{background:#2b4430;border-color:#a8c58c}
+html[data-theme="dark"] button.veyl-motion-control{background:#203526;color:#d1e8aa;border-color:#647c55;box-shadow:0 3px 12px #0003}
+html[data-theme="dark"] button.veyl-motion-control:hover{background:#2b4430;border-color:#a8c58c}
 html[data-theme="dark"] button.veyl-motion-control:disabled{color:#aabca1}
-html[data-theme="dark"] :is(.veyl-theme-control,.veyl-motion-control)::after{background:#d8e7c9;color:#182a21}
+html[data-theme="dark"] .veyl-motion-control::after{background:#d8e7c9;color:#182a21}
 
 /* Public pages: the folds remain green, with readable copy on every layer. */
 html[data-theme="dark"] :is(.landing,.documentation,.identity,.market-page) :is(p,li,small,dt,.section-number,.nav-links,.text-link,.token-address,.docs-eyebrow,.docs-topic-number,.docs-nav>a,.docs-nav>span,.docs-end>span,.site-footer>div,.site-footer>div>span){color:var(--muted)}
@@ -128,11 +118,8 @@ html[data-theme="dark"] :is(.skip-link,.docs-skip){background:#d1e4b8;color:#172
 html[data-theme="dark"] body>main>p#status{color:var(--muted)}
 html[data-theme="dark"] body>main>p#status+a{color:var(--theme-link)}
 @media(max-width:760px){
-  button.veyl-theme-control{right:66px;bottom:max(12px,env(safe-area-inset-bottom))}
   html[data-theme="dark"] body{--fold-front:.16;--fold-back:.085}
 }
-@media(prefers-reduced-motion:reduce){button.veyl-theme-control,.veyl-theme-control::after{transition:none}}
-@media print{button.veyl-theme-control{display:none}}
 
-/* Keep end-of-page content above the appearance controls. */
+/* Keep end-of-page content above the motion control. */
 .site-footer,.main-shell>footer,.docs-end{padding-bottom:max(72px,calc(env(safe-area-inset-bottom) + 64px))}

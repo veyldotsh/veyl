@@ -6,6 +6,10 @@ export interface Job { id: string; projectId: string; requestKey?: string; statu
 export interface Memory { id: string; content: string; at: string; requestKey?: string; }
 export interface Draft { id: string; status: string; channel: 'x' | 'telegram'; preview: { text: string; [key: string]: unknown }; [key: string]: unknown; }
 export interface Model { id: string; [key: string]: unknown; }
+export interface WatchlistSettings { name: string; brief: string; sources: string[]; enabled: boolean; cadenceMinutes: 60 | 360 | 1440; reviewerModel?: string | null; }
+export interface ResearchWatchlist extends WatchlistSettings { id: string; requestKey: string; [key: string]: unknown; }
+export interface ResearchCheck { id: string; requestKey: string; status: string; [key: string]: unknown; }
+export interface ResearchSnapshot { watchlists: ResearchWatchlist[]; checks: ResearchCheck[]; limits: Record<string, number | number[]>; sourceHosts: string[]; historyOmitted: number; }
 export class VeylApiError extends Error { status: number; code: string; requestId?: string; uncertain: boolean; }
 export class VeylClient {
   constructor(options: VeylOptions);
@@ -15,6 +19,12 @@ export class VeylClient {
   job(id: string): Promise<{ job: Job; artifact: Record<string, unknown> | null }>;
   submitJob(input: { requestKey: string; prompt: string }): Promise<{ job: Job }>;
   memory(): Promise<{ memory: Memory[] }>;
+  research(): Promise<ResearchSnapshot>;
+  /** Explicit enabled=true authorizes scheduled checks and budgeted changed-source reports. */
+  createWatchlist(input: WatchlistSettings & { requestKey: string }): Promise<{ watchlist: ResearchWatchlist }>;
+  updateWatchlist(id: string, input: Partial<WatchlistSettings>): Promise<{ watchlist: ResearchWatchlist }>;
+  /** May queue paid work when fetched source content changes. Never retried automatically. */
+  checkWatchlist(id: string, input: { requestKey: string }): Promise<{ check: ResearchCheck }>;
   saveMemory(input: { requestKey: string; content: string }): Promise<{ memory: Memory }>;
   drafts(): Promise<{ drafts: Draft[] }>;
   /** At most 4096 raw characters; X weighting is checked by the server. madeWithAi is local draft provenance, not an X media label. */

@@ -1,6 +1,6 @@
 {
   "name": "@veyl/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Project-scoped Veyl API client and local stdio MCP adapter",
   "type": "module",
   "main": "./client.mjs",

@@ -27,6 +27,7 @@ export function createApp(kit) {
       if (req.method === 'GET' && url.pathname === '/api/models') return json(200, await kit.provider.models());
       if (req.method === 'GET' && url.pathname === '/api/chain') return json(200, await kit.chain.status());
       if (req.method === 'GET' && url.pathname === '/api/funding') return json(200, kit.funding?.snapshot() || { credentialsConfigured: false, approvalEnabled: false, intents: [] });
+      if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'research') { if (url.search) throw new Problem('Research endpoints do not accept query parameters.'); return json(200, kit.research.snapshot(parts[2])); }
       if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'balance') return json(200, { eth: await kit.chain.balance(kit.project(parts[2])) });
       if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'revenue') return json(200, await kit.chain.revenueStatus(kit.project(parts[2])));
       if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'projects' && parts.length === 4 && parts[3] === 'market') return json(200, kit.markets ? await kit.markets.status(kit.project(parts[2])) : { configured: false });
@@ -54,7 +55,14 @@ export function createApp(kit) {
             case 'resume': return json(200, await kit.funding.resume(body));
           }
         }
-        if (url.pathname === '/api/projects') return json(201, kit.create(body));
+        if (url.pathname === '/api/projects') return json(201, kit.projectView(kit.create(body)));
+        if (parts[1] === 'projects' && parts[3] === 'watches') {
+          if (url.search) throw new Problem('Research endpoints do not accept query parameters.');
+          if (parts.length === 4) return json(201, kit.research.create(parts[2], body));
+          if (parts.length === 5) return json(200, kit.research.update(parts[2], parts[4], body));
+          if (parts.length === 6 && parts[5] === 'check') return json(202, await kit.research.check(parts[2], parts[4], body));
+          throw new Problem('Research endpoint not found.', 404);
+        }
         if (parts[1] === 'projects' && parts.length === 4) {
           const id = parts[2];
           switch (parts[3]) {
@@ -66,11 +74,11 @@ export function createApp(kit) {
             case 'fund': return json(200, await kit.fund(id));
             case 'revenue': return json(200, await kit.revenue(id));
             case 'distribute': return json(200, await kit.revenue(id, true));
-            case 'pause': return json(200, kit.pause(id));
-            case 'settings': return json(200, kit.settings(id, body));
-            case 'notes': return json(200, kit.note(id, body.content));
-            case 'sources': return json(200, await kit.source(id, body.url));
-            case 'schedule': return json(200, kit.schedule(id, body));
+            case 'pause': return json(200, kit.projectView(kit.pause(id)));
+            case 'settings': return json(200, kit.projectView(kit.settings(id, body)));
+            case 'notes': return json(200, kit.projectView(kit.note(id, body.content)));
+            case 'sources': return json(200, kit.projectView(await kit.source(id, body.url)));
+            case 'schedule': return json(200, kit.projectView(kit.schedule(id, body)));
             case 'jobs': return json(202, await kit.submit(id, body));
           }
         }
@@ -85,6 +93,8 @@ export function createApp(kit) {
       assets['/ambient.js'] = ['ambient.js', 'text/javascript'];
       assets['/theme.css'] = ['theme.css', 'text/css'];
       assets['/theme.js'] = ['theme.js', 'text/javascript'];
+      assets['/research-panel.js'] = ['research-panel.js', 'text/javascript'];
+      assets['/research-panel.css'] = ['research-panel.css', 'text/css'];
       assets['/ambient-fold.svg'] = ['ambient-fold.svg', 'image/svg+xml'];
       for (const file of ['site.html', 'index.html', 'docs.html', 'developers.html', 'brand.html', 'oauth-callback.html', 'market.html']) assets[`/${file}`] = [file, 'text/html'];
       assets['/developer-panel.css'] = ['developer-panel.css', 'text/css'];

@@ -40,6 +40,16 @@ test('distributable SDK works against real scoped HTTP routes, queue idempotency
   await assert.rejects(client.submitJob({ ...input, prompt: 'Changed request' }), e => e.status === 409 && !e.uncertain);
   const memoryInput = { requestKey: randomUUID(), content: 'Persisted SDK note' }, memory = await client.saveMemory(memoryInput);
   assert.equal((await client.saveMemory(memoryInput)).memory.id, memory.memory.id); assert.equal((await client.memory()).memory.length, 1);
+  let sourceReads = 0;
+  kit.research.reader = async url => { sourceReads++; return { url, text: 'Captured SDK fixture source', fetchedAt: new Date().toISOString(), possiblyTruncated: false }; };
+  const watchInput = { requestKey: randomUUID(), name: 'SDK source', brief: 'Track captured changes.', sources: ['https://ethereum.org/en/'], enabled: false, cadenceMinutes: 60 };
+  const { watchlist } = await client.createWatchlist(watchInput);
+  assert.equal((await client.createWatchlist(watchInput)).watchlist.id, watchlist.id);
+  const checkInput = { requestKey: randomUUID() }, checked = await client.checkWatchlist(watchlist.id, checkInput);
+  assert.equal(checked.check.status, 'baseline'); assert.equal((await client.checkWatchlist(watchlist.id, checkInput)).check.id, checked.check.id);
+  assert.equal(sourceReads, 1); assert.equal((await client.research()).checks.length, 1);
+  assert.equal((await client.updateWatchlist(watchlist.id, { cadenceMinutes: 360 })).watchlist.cadenceMinutes, 360);
+  assert.equal(project.committed, 1000); assert.equal(kit.store.data.jobs.length, 1);
   await assert.rejects(client.prepareDraft({ channel: 'x', text: 'No draft permission', idempotencyKey: randomUUID() }), e => e.status === 403 && e.code === 'INSUFFICIENT_SCOPE');
   registry.developerKeys.revoke(owner, project.id, issued.key.id);
   await assert.rejects(client.project(), e => e instanceof VeylApiError && e.status === 401 && e.code === 'UNAUTHENTICATED');

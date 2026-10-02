@@ -4,6 +4,7 @@ import { readSource, SOURCE_HOSTS } from './tools.mjs';
 import { FEE_ALLOCATION } from './economics.mjs';
 import { MODEL_OUTPUT_RESERVE_BYTES } from './store.mjs';
 import { accountingIdentity, applySettlement, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
+import { ResearchDesk } from './research.mjs';
 
 const templates = {
   research: { name: 'Research desk', role: 'Researcher', description: 'Turn supplied sources into a sourced brief and questions worth investigating.' },
@@ -16,13 +17,15 @@ const serializedBytes = value => Buffer.byteLength(JSON.stringify(value));
 const routineEvents = new Set(['created', 'task', 'delivered', 'status', 'settings', 'source', 'fee-retry', 'schedule-paused', 'schedule-deferred', 'runtime-release']);
 class LocalReadinessStopped extends Problem {}
 export class Kit {
-  constructor({ store, provider, chain, markets = null, funding = null, agentTools = null, prepareSocialDraft = null, providerForProject = () => provider, providerCatalogForProject = () => provider.models(), fundingForProject = () => funding, beforeAdmission = async () => {}, queue = null, now = () => new Date() }) {
+  constructor({ store, provider, chain, markets = null, funding = null, agentTools = null, prepareSocialDraft = null, providerForProject = () => provider, providerCatalogForProject = () => provider.models(), fundingForProject = () => funding, beforeAdmission = async () => {}, queue = null, now = () => new Date(), researchReader = readSource }) {
     if (queue && (typeof queue.assertCapacity !== 'function' || typeof queue.enqueue !== 'function')) throw new Problem('Invalid runtime queue configuration.', 503);
     this.store = store; this.provider = provider; this.providerForProject = providerForProject; this.providerCatalogForProject = providerCatalogForProject; this.fundingForProject = fundingForProject; this.queue = queue; this.agentTools = agentTools; this.prepareSocialDraft = prepareSocialDraft; this.chain = chain; this.markets = markets; this.funding = funding; this.now = now; this.running = false; this.operations = new Set();
     this.beforeAdmission = beforeAdmission;
+    this.research = new ResearchDesk(this, { reader: researchReader });
   }
   project(id) { const result = this.store.data.projects.find(item => item.id === id); if (!result) throw new Problem('Project not found.', 404); return result; }
-  snapshot() { return { mode: this.provider.mode, busy: this.running, persistence: this.store.healthy ? 'healthy' : 'blocked', storage: this.store.storage(), templates, feeAllocation: FEE_ALLOCATION, sourceHosts: SOURCE_HOSTS, projects: this.store.data.projects, jobs: this.store.data.jobs.slice(-100), settlement: 'Pinned native receipts record exact ETH charges and ceiling USD valuations; unknown and legacy call caps remain held.', capabilities: { token: 'local-anvil', pools: this.markets ? 'local-uniswap-v4' : false, funding: this.funding?.capabilities() || null, publishing: false, inference: this.provider.mode === 'zkapi' ? 'local-zkapi-adapter' : 'simulation', fundingPrivacy: 'upstream zkAPI note-to-authorization link only; prompts are visible to the provider', settlementReconciliation: this.provider.mode === 'zkapi' ? 'authenticated-native-call-receipts' : false, sourceReading: true } }; }
+  projectView({ research, ...project }) { return project; }
+  snapshot() { return { mode: this.provider.mode, busy: this.running, persistence: this.store.healthy ? 'healthy' : 'blocked', storage: this.store.storage(), templates, feeAllocation: FEE_ALLOCATION, sourceHosts: SOURCE_HOSTS, projects: this.store.data.projects.map(project => this.projectView(project)), jobs: this.store.data.jobs.slice(-100), settlement: 'Pinned native receipts record exact ETH charges and ceiling USD valuations; unknown and legacy call caps remain held.', capabilities: { token: 'local-anvil', pools: this.markets ? 'local-uniswap-v4' : false, funding: this.funding?.capabilities() || null, publishing: false, inference: this.provider.mode === 'zkapi' ? 'local-zkapi-adapter' : 'simulation', fundingPrivacy: 'upstream zkAPI note-to-authorization link only; prompts are visible to the provider', settlementReconciliation: this.provider.mode === 'zkapi' ? 'authenticated-native-call-receipts' : false, sourceReading: true } }; }
   create(input) {
     this.store.assertHealthy();
     const requestKey = key(input.requestKey); const existing = this.store.data.projects.find(p => p.requestKey === requestKey);
@@ -111,14 +114,17 @@ export class Kit {
     }
     this.store.save(); return p;
   }
-  async submit(id, input) {
+  async submit(id, input, research = null) {
     this.store.assertHealthy();
     const p = this.project(id), requestKey = key(input.requestKey), prompt = text(input.prompt, 8000, 'task');
+    if (!research && requestKey.startsWith('research-')) throw new Problem('This request key is reserved for durable research jobs.', 409);
+    const researchAdmission = research ? this.research.admission(p, research) : null;
+    if (researchAdmission && (requestKey !== researchAdmission.requestKey || prompt !== researchAdmission.prompt)) throw new Problem('Research admission payload changed.', 409);
     const previous = this.store.data.jobs.find(j => j.requestKey === requestKey);
-    if (previous) { if (previous.projectId !== id || previous.prompt !== prompt) throw new Problem('Request key already used for another task.', 409); return previous; }
+    if (previous) { if (previous.projectId !== id || previous.prompt !== prompt || (researchAdmission && JSON.stringify(previous.research) !== JSON.stringify(researchAdmission.metadata))) throw new Problem('Request key already used for another task.', 409); return previous; }
     if (this.running) throw new Problem('The shared runtime is busy. Wait for the current task.', 409);
     if (p.status !== 'active') throw new Problem('Resume this project before starting work.', 409);
-    const roles = p.swarm ? ['Planner', templates[p.template].role, 'Reviewer'] : [templates[p.template].role];
+    const roles = researchAdmission?.roles || (p.swarm ? ['Planner', templates[p.template].role, 'Reviewer'] : [templates[p.template].role]);
     const outputReservation = (roles.length + 1) * MODEL_OUTPUT_RESERVE_BYTES;
     this.running = true;
     let provider, job, started = false;
@@ -136,7 +142,7 @@ export class Kit {
         if (!provider || provider.mode !== this.provider.mode) throw new Problem('Project inference configuration is unavailable.', 503);
         models = await provider.models();
       }
-      const model = models.find(m => m.id === p.model);
+      const model = models.find(m => m.id === (researchAdmission?.model || p.model));
       this.store.assertHealthy();
       if (!model) throw new Problem('Selected model is unavailable.');
       const modelCap = positive(model.oa_request_limit_micro_usd, 'model cap');
@@ -150,7 +156,8 @@ export class Kit {
       await this.beforeAdmission(p);
       this.store.assertHealthy();
       if (p.status !== 'active') throw new Problem('Project was paused before execution.', 409);
-      job = { id: randomUUID(), requestKey, projectId: id, prompt, model: p.model, mode: this.provider.mode, ...(tracked ? { modelCap } : {}), ...(this.queue ? { dispatch: 'scheduler' } : {}), status: 'queued', at: this.now().toISOString(), day, cap, reservation, storageReservationBytes: outputReservation, steps: roles.map(role => ({ role, status: 'queued' })), error: null };
+      if (researchAdmission) this.research.admission(p, research);
+      job = { id: randomUUID(), requestKey, projectId: id, prompt, model: researchAdmission?.model || p.model, ...(researchAdmission ? { research: researchAdmission.metadata } : {}), mode: this.provider.mode, ...(tracked ? { modelCap } : {}), ...(this.queue ? { dispatch: 'scheduler' } : {}), status: 'queued', at: this.now().toISOString(), day, cap, reservation, storageReservationBytes: outputReservation, steps: roles.map(role => ({ role, status: 'queued' })), error: null };
       this.store.assertCapacity(outputReservation + serializedBytes(job) + 8192);
       p.committed += reservation; p.days[day] = (p.days[day] || 0) + reservation;
       this.store.data.jobs.push(job); this.event(p, 'task', `Task accepted; ${roles.length} stage(s) budgeted.`); this.store.save();
@@ -188,14 +195,14 @@ export class Kit {
     if (this.running) return { deferred: true };
     const p = this.project(job.projectId); this.running = true; let provider;
     try {
-      if (p.status !== 'active' || p.model !== job.model) throw new Problem('Project was paused or its admitted model changed before dispatch.', 409);
+      if (p.status !== 'active' || p.model !== (job.research?.baseModel || job.model) || !this.research.dispatchAllowed(p, job)) throw new Problem('Project, watchlist or admitted model changed before dispatch.', 409);
       try { provider = await this.providerForProject(p); }
       catch (error) { if (error?.dispatchDeferred === true || error?.retryableNoDispatch === true) return { deferred: true }; throw error; }
       if (!provider || provider.mode !== job.mode) throw new Problem('The project runtime changed before dispatch.', 503);
       const models = await provider.models(), model = models.find(item => item.id === job.model);
       this.store.assertHealthy();
       if (!model || positive(model.oa_request_limit_micro_usd, 'live model cap') > (job.modelCap ?? job.cap) || (job.modelCap !== undefined && model.oa_request_limit_micro_usd !== job.modelCap) || (model.oa_accounting_margin_micro_usd !== undefined && job.modelCap === undefined)) throw new Problem('The live model spending cap exceeds or differs from the saved reservation or the model is unavailable.', 409);
-      if (p.status !== 'active' || p.model !== job.model) throw new Problem('Project changed before dispatch.', 409);
+      if (p.status !== 'active' || p.model !== (job.research?.baseModel || job.model) || !this.research.dispatchAllowed(p, job)) throw new Problem('Project or watchlist changed before dispatch.', 409);
       this.execution = this.execute(p, job, provider); await this.execution; return job;
     } catch (error) {
       job.status = 'interrupted'; job.error = error instanceof Problem ? error.message + ' Reservation retained; no automatic retry.' : 'Runtime acquisition could not be confirmed. Reservation retained; no automatic retry.';
@@ -382,6 +389,7 @@ export class Kit {
   async tick() {
     this.store.assertHealthy();
     await this.tickFees();
+    await this.research.tick();
     if (this.running) return;
     const due = this.store.data.projects.find(p => p.status === 'active' && p.schedule && +new Date(p.schedule.nextAt) <= +this.now());
     if (!due) return;

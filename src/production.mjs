@@ -467,7 +467,7 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
         const project = kit.create({ ...body, model: body.model || 'pending' });
         // Provisioning has no funding or signing step and survives browser closure.
         registry.prepareProject(session.address, project).catch(() => {});
-        return json(201, project);
+        return json(201, kit.projectView(project));
       }
       if (parts[0] === 'api' && parts[1] === 'artifacts' && parts.length === 3 && req.method === 'GET') {
         const artifact = kit.store.data.projects.flatMap(p => p.artifacts).find(a => a.id === parts[2]); if (!artifact) throw new Problem('Artifact not found.', 404);
@@ -475,6 +475,17 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
       }
       if (parts[0] === 'api' && parts[1] === 'projects' && parts.length >= 4) {
         const project = kit.project(parts[2]);
+        if (parts[3] === 'research' || parts[3] === 'watches') {
+          if (url.search) throw new Problem('Research endpoints do not accept query parameters.');
+          if (parts[3] === 'research' && parts.length === 4 && req.method === 'GET') return json(200, kit.research.snapshot(project.id));
+          if (parts[3] === 'watches' && req.method === 'POST') {
+            registry.resources.assertCapacity();
+            if (parts.length === 4) return json(201, kit.research.create(project.id, body));
+            if (parts.length === 5) return json(200, kit.research.update(project.id, parts[4], body));
+            if (parts.length === 6 && parts[5] === 'check') return json(202, await kit.research.check(project.id, parts[4], body));
+          }
+          throw new Problem('Research endpoint not found.', 404);
+        }
         if (parts[3] === 'developer-keys') {
           if (parts.length === 4 && req.method === 'GET') return json(200, { keys: registry.developerKeys.list(session.address, project.id) });
           if (parts.length === 4 && req.method === 'POST') { registry.resources.assertCapacity(); return json(201, registry.developerKeys.issue(session.address, project.id, body)); }
@@ -571,11 +582,11 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
         }
         if (parts.length === 4 && req.method === 'POST') {
           switch (parts[3]) {
-            case 'pause': return json(200, kit.pause(project.id));
-            case 'notes': return json(200, kit.note(project.id, body.content));
-            case 'sources': return json(200, await kit.source(project.id, body.url));
-            case 'schedule': return json(200, kit.schedule(project.id, body));
-            case 'settings': return json(200, await kit.settings(project.id, body));
+            case 'pause': return json(200, kit.projectView(kit.pause(project.id)));
+            case 'notes': return json(200, kit.projectView(kit.note(project.id, body.content)));
+            case 'sources': return json(200, kit.projectView(await kit.source(project.id, body.url)));
+            case 'schedule': return json(200, kit.projectView(kit.schedule(project.id, body)));
+            case 'settings': return json(200, kit.projectView(await kit.settings(project.id, body)));
             case 'jobs': if (kit.operations.has(project.id)) throw new Problem('Wait for project funding or maintenance before submitting work.', 409); return json(202, await kit.submit(project.id, body));
           }
         }

@@ -5,6 +5,7 @@ const when = value => new Date(value).toLocaleTimeString([], { hour: '2-digit', 
 const glyph = type => ({ research: '◈', builder: '⌘', community: '✳' }[type] || '◈');
 let state, models = [], chain = {}, view = 'home', selected = null, tab = 'runtime', step = 0, creating = false, toastTimer;
 let launchKey = crypto.randomUUID(), pendingRender = false;
+let researchPanel = null, researchPanelGeneration = 0;
 const pages = Object.create(null);
 let agentFilter = 'all';
 async function api(path, body) {
@@ -22,12 +23,12 @@ function stats(project) {
 function renderShell() {
   $('mode').hidden = state.hosted === true;
   $('mode').textContent = state.hosted ? '' : state.mode === 'demo' ? 'LOCAL DEMO' : 'zkAPI WORKSPACE';
+  $('runtime-status').hidden = false;
   $('runtime-status').textContent = state.persistence === 'blocked' ? 'Storage error · runtime blocked' : state.busy ? 'Runtime working' : state.hosted ? 'Hosted runtime online' : 'Local runtime online';
   $('job-count').textContent = state.jobs.length; document.querySelectorAll('[data-launch], .sidebar .nav').forEach(el => el.disabled = false); if (state.hosted) { $('wallet-control').textContent = state.wallet.slice(0, 6) + '…' + state.wallet.slice(-4) + ' · Sign out'; }
   $('project-nav').innerHTML = state.projects.filter(p => !state.hosted || !isPlatformProject(p)).map(p => `<button class="project-link ${selected === p.id && view === 'project' ? 'active' : ''}" data-project="${p.id}"><span>${glyph(p.template)}</span>${esc(p.name)}</button>`).join('');
   document.querySelectorAll('.nav').forEach(el => el.classList.toggle('active', el.dataset.view === view));
   $('page-title').textContent = view === 'home' ? 'Overview' : view === 'platform' ? 'VEYL market' : view === 'jobs' ? 'Activity' : view === 'tools' ? 'Tools & connections' : state.projects.find(p => p.id === selected)?.name || 'Agent';
-  $('chain-label').textContent = state.hosted ? (state.capabilities?.transactionsEnabled ? 'Ethereum · wallet transactions' : 'Ethereum · transaction review') : chain.ready ? '● Local Anvil · 31337 · Development ETH' : '○ Local chain offline';
 }
 function pageList(items, key, size, item, empty = '') {
   const count = Math.max(1, Math.ceil(items.length / size));
@@ -68,7 +69,8 @@ function renderProject() {
     return `<div class="project-head"><div class="project-title"><span class="avatar">◈</span><div><h1>VEYL</h1><p>Platform token · Ethereum · VEYL/ETH</p></div></div></div><p class="subtext">Manage the platform market and its operating treasury. Individual agent models, budgets and social connections belong to their own workspaces.</p><div id="mainnet-panel">Reading Ethereum market…</div>`;
   }
   const jobs = state.jobs.filter(j => j.projectId === p.id).reverse();
-  const header = `<div class="project-head"><div class="project-title"><span class="avatar">${glyph(p.template)}</span><div><h1>${esc(p.name)}</h1><p>$${esc(p.symbol)} · ${p.swarm ? 'Specialist swarm' : 'Solo agent'} · ${esc(p.status)}</p></div></div><button class="button secondary" data-action="pause">${p.status === 'active' ? 'Ⅱ Pause runtime' : '▷ Resume runtime'}</button></div>${['market', 'connections', 'developer'].includes(tab) ? '' : stats(p)}<div class="tabs">${['runtime', 'market', 'treasury', 'memory', 'deliverables', 'connections', 'developer'].map(t => `<button class="tab ${tab === t ? 'active' : ''}" data-tab="${t}">${t[0].toUpperCase() + t.slice(1)}${t === 'deliverables' ? ` (${p.artifacts.length})` : ''}</button>`).join('')}</div>`;
+  const header = `<div class="project-head"><div class="project-title"><span class="avatar">${glyph(p.template)}</span><div><h1>${esc(p.name)}</h1><p>$${esc(p.symbol)} · ${p.swarm ? 'Specialist swarm' : 'Solo agent'} · ${esc(p.status)}</p></div></div><button class="button secondary" data-action="pause">${p.status === 'active' ? 'Ⅱ Pause runtime' : '▷ Resume runtime'}</button></div>${['research', 'market', 'connections', 'developer'].includes(tab) ? '' : stats(p)}<div class="tabs">${['runtime', 'research', 'market', 'treasury', 'memory', 'deliverables', 'connections', 'developer'].map(t => `<button class="tab ${tab === t ? 'active' : ''}" data-tab="${t}">${t[0].toUpperCase() + t.slice(1)}${t === 'deliverables' ? ` (${p.artifacts.length})` : ''}</button>`).join('')}</div>`;
+  if (tab === 'research') return header + '<div id="research-panel">Reading research history…</div>';
   if (tab === 'developer') return header + '<div id="developer-panel">Reading project developer access…</div>';
   if (tab === 'connections') return header + '<div id="social-panel" class="social-panel">Reading project connections…</div>';
   if (tab === 'market') return header + (state.hosted ? '<div id="mainnet-panel">Reading Ethereum configuration…</div>' : renderMarketPanel(p));
@@ -85,12 +87,14 @@ function renderTools() {
 }
 function renderPlatformMarket() { return `<div class="project-head"><div><p class="eyebrow">PLATFORM TOKEN</p><h1>VEYL market.</h1><p class="subtext">Trade VEYL/ETH and collect fees to their fixed recipients. Every transaction requires your wallet approval.</p></div><a class="text-link" href="/market">Public market overview ↗</a></div><div id="mainnet-panel">Reading Ethereum market…</div>`; }
 function render() {
+  researchPanel?.destroy(); researchPanel = null; researchPanelGeneration++;
   mainnetPanel?.destroy(); mainnetPanel = null; mainnetPanelGeneration++; socialPanel?.destroy(); socialPanel = null; socialPanelGeneration++; runwayPanel?.destroy(); runwayPanel = null; runwayPanelGeneration++; developerPanel?.destroy(); developerPanel = null; developerPanelGeneration++; pendingRender = false;
   if (view === 'project' && !state.projects.some(p => p.id === selected)) { view = 'home'; selected = null; }
   if (view === 'platform' && !state.hosted) view = 'home';
   const locationState = new URLSearchParams({ view }); if (view === 'project') { locationState.set('id', selected); locationState.set('tab', tab); } history.replaceState(null, '', '/app#' + locationState);
   renderShell(); $('content').innerHTML = view === 'home' ? renderHome() : view === 'platform' ? renderPlatformMarket() : view === 'project' ? renderProject() : view === 'tools' ? renderTools() : `<div class="section-title"><div><h2>Work, from start to finish.</h2><p>Every task across your agents.</p></div><span class="badge">${state.jobs.length} TASKS</span></div><section class="panel">${pageList(state.jobs.slice().reverse(), 'activity', matchMedia('(max-width:760px)').matches ? 3 : 5, jobCard, '<div class="empty"><b>A fresh page.</b>Launch an agent and give it a task to start.</div>')}</section>`;
   if (view === 'project' && tab === 'treasury' && state.hosted) loadRunwayPanel(state.projects.find(p => p.id === selected));
+  if (view === 'project' && tab === 'research') loadResearchPanel(state.projects.find(p => p.id === selected));
   if (view === 'project' && tab === 'developer') loadDeveloperPanel(state.projects.find(p => p.id === selected));
   if (view === 'project' && tab === 'connections') loadSocialPanel(state.projects.find(p => p.id === selected));
   if (view === 'platform' && state.hosted) loadMainnetPanel(publicPlatformProject);
@@ -154,7 +158,7 @@ $('launch-form').addEventListener('submit', async event => {
   finally { creating = false; $('create').disabled = false; $('create').textContent = 'Create agent ↗'; }
 });
 document.addEventListener('submit', async event => {
-  const form = event.target; if (form.id === 'launch-form' || form.hasAttribute('data-mainnet-form') || form.hasAttribute('data-social-form') || form.hasAttribute('data-runway-form') || form.hasAttribute('data-developer-form')) return;
+  const form = event.target; if (form.id === 'launch-form' || form.hasAttribute('data-mainnet-form') || form.hasAttribute('data-social-form') || form.hasAttribute('data-runway-form') || form.hasAttribute('data-developer-form') || form.hasAttribute('data-research-form')) return;
   event.preventDefault(); const button = form.querySelector('button[type=submit]'); if (button) button.disabled = true;
   try {
     const data = new FormData(form), base = `/api/projects/${selected}`;
@@ -169,14 +173,14 @@ document.addEventListener('submit', async event => {
   } catch (error) { toast(error.message); if (button) button.disabled = false; }
 });
 async function init() {
-  try { if (!await sessionBootstrap()) return; const savedView = new URLSearchParams(location.hash.slice(1)); if (['home','project','jobs','tools','platform'].includes(savedView.get('view'))) view = savedView.get('view'); selected = savedView.get('id'); if (['runtime','market','treasury','memory','deliverables','connections','developer'].includes(savedView.get('tab'))) tab = savedView.get('tab'); await refresh(); const results = await Promise.allSettled([api('/api/models'), api('/api/chain')]);
+  try { if (!await sessionBootstrap()) return; const savedView = new URLSearchParams(location.hash.slice(1)); if (['home','project','jobs','tools','platform'].includes(savedView.get('view'))) view = savedView.get('view'); selected = savedView.get('id'); if (['runtime','research','market','treasury','memory','deliverables','connections','developer'].includes(savedView.get('tab'))) tab = savedView.get('tab'); await refresh(); const results = await Promise.allSettled([api('/api/models'), api('/api/chain')]);
     if (results[0].status === 'fulfilled') models = results[0].value; else toast(results[0].reason.message);
     if (results[1].status === 'fulfilled') chain = results[1].value;
     $('launch-model').innerHTML = models.length ? models.map(m => `<option value="${esc(m.id)}">${esc(m.id)} · ${money(m.oa_request_limit_micro_usd)} cap${m.oa_accounting_margin_micro_usd ? ` + ${(m.oa_accounting_margin_micro_usd / 1e6).toFixed(3)} USD reserve` : ''}</option>`).join('') : '<option value="pending">Select after runtime setup</option>'; render();
     const preset = new URLSearchParams(location.search).get('template'); if (Object.hasOwn(state.templates, preset)) launch(preset);
   } catch (error) { $('content').textContent = error.message; }
 }
-setInterval(async () => { if (!state || creating) return; try { const wasBusy = state.busy; const next = await api('/api/state'); pendingRender ||= next.persistence !== state.persistence || next.busy !== wasBusy || JSON.stringify(next.jobs) !== JSON.stringify(state.jobs); state = next; if (pendingRender && !(view === 'project' && ['connections', 'developer'].includes(tab)) && !document.activeElement?.closest('form, details') && !document.activeElement?.matches('input, select, textarea')) render(); else renderShell(); } catch {} }, 5000);
+setInterval(async () => { if (!state || creating) return; try { const wasBusy = state.busy; const next = await api('/api/state'); pendingRender ||= next.persistence !== state.persistence || next.busy !== wasBusy || JSON.stringify(next.jobs) !== JSON.stringify(state.jobs); state = next; if (pendingRender && !(view === 'project' && ['connections', 'developer', 'research'].includes(tab)) && !document.activeElement?.closest('form, details') && !document.activeElement?.matches('input, select, textarea')) render(); else renderShell(); } catch {} }, 5000);
 init();
 
 document.addEventListener('input', event => { if (event.target.closest('#trade-form')) { marketQuotes.delete(selected); if ($('trade-quote')) $('trade-quote').innerHTML = ''; } });

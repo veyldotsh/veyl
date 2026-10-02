@@ -27,12 +27,25 @@ export async function developerRequest({ identity, method, url, body, registry, 
       return { status: 200, body: { job, artifact: project.artifacts.find(artifact => artifact.id === job.artifactId && artifact.jobId === job.id) || null } };
     }
     if (route === 'memory') return { status: 200, body: { memory: project.notes } };
+    if (route === 'research') return { status: 200, body: kit.research.snapshot(project.id) };
     if (route === 'drafts') { const drafts = registry.social(identity.address, project.id).snapshot().outbox; return { status: 200, body: { drafts: drafts.slice(-100), hasMore: drafts.length > 100 } }; }
   }
   if (method === 'POST' && route === 'jobs') {
     requireScope(identity, 'jobs'); schema(body, ['requestKey', 'prompt']);
     registry.resources.assertCapacity();
     return { status: 202, body: { job: await kit.submit(project.id, body) } };
+  }
+  if (method === 'POST' && (route === 'research/watchlists' || /^research\/watchlists\/[a-f0-9-]{36}(?:\/checks)?$/.test(route))) {
+    requireScope(identity, 'jobs');
+    const fields = ['name', 'brief', 'sources', 'enabled', 'cadenceMinutes', 'reviewerModel'];
+    if (route === 'research/watchlists') schema(body, ['requestKey', ...fields.slice(0, 5)], ['reviewerModel']);
+    else if (route.endsWith('/checks')) schema(body, ['requestKey']);
+    else schema(body, [], fields);
+    kit.store.assertHealthy(); registry.resources.assertCapacity();
+    if (route === 'research/watchlists') return { status: 201, body: { watchlist: await kit.research.create(project.id, body) } };
+    const watchId = route.split('/')[2];
+    if (route.endsWith('/checks')) return { status: 200, body: { check: await kit.research.check(project.id, watchId, body) } };
+    return { status: 200, body: { watchlist: await kit.research.update(project.id, watchId, body) } };
   }
   if (method === 'POST' && route === 'memory') {
     requireScope(identity, 'memory'); schema(body, ['requestKey', 'content']); kit.store.assertHealthy();

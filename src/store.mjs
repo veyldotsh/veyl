@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, openSync, closeSync
 import { dirname } from 'node:path';
 import { Problem } from './agent.mjs';
 import { validateCall, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accounting.mjs';
+import { validateResearchState, validateResearchJob } from './research.mjs';
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const amount = value => Number.isSafeInteger(value) && value >= 0;
@@ -26,6 +27,7 @@ function validate(data, mode) {
     if (p.schedule !== null && (!object(p.schedule) || ![15, 60, 1440].includes(p.schedule.minutes) || typeof p.schedule.prompt !== 'string' || !Number.isFinite(Date.parse(p.schedule.nextAt)))) invalid();
     if (p.accountingJournalId !== undefined && !/^[0-9a-f]{32}$/.test(p.accountingJournalId)) invalid();
     if (p.accountingRecoveryCursor !== undefined && !amount(p.accountingRecoveryCursor)) invalid();
+    if (!validateResearchState(p)) invalid();
     projects.set(p.id, p); keys.add(p.requestKey); totals.set(p.id, 0); days.set(p.id, new Map());
   }
   keys.clear();
@@ -35,6 +37,7 @@ function validate(data, mode) {
         !['queued', 'running', 'completed', 'interrupted'].includes(job.status) || !date(job.day) || !amount(job.cap) || job.cap === 0 || job.cap > 1_000_000_000 ||
         !amount(job.reservation) || !Array.isArray(job.steps) || ![1, 3].includes(job.steps.length)) invalid();
     if ((job.model !== undefined && (typeof job.model !== 'string' || !job.model || job.model.length > 256)) || (job.dispatch !== undefined && job.dispatch !== 'scheduler') || (job.dispatch === 'scheduler' && !job.model)) invalid();
+    if (!validateResearchJob(job, data.jobs)) invalid();
     if (job.storageReservationBytes !== undefined && (!amount(job.storageReservationBytes) || job.storageReservationBytes > TENANT_STATE_MAX_BYTES)) invalid();
     if (job.modelCap !== undefined && (mode !== 'zkapi' || !amount(job.modelCap) || job.modelCap < 1 || job.cap !== job.modelCap + ACCOUNTING_MARGIN_MICRO_USD)) invalid();
     const heldFor = call => {

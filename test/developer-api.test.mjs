@@ -114,3 +114,43 @@ test('read-only keys cannot mutate and write-only keys cannot enumerate project 
   assert.equal((await f.request('/api/developer/v1/memory', { token: write, body: { requestKey: randomUUID(), content: 'Allowed memory' } })).status, 201);
   assert.equal((await f.request('/api/developer/v1/project', { session: f.sessions[0] })).status, 401);
 });
+
+test('research developer access requires jobs scope for every mutation and cannot select another project', async t => {
+  const f = await apiFixture(t), token = f.issue().token, read = f.issue(['read']).token, write = f.issue(['jobs']).token;
+  const input = { requestKey: randomUUID(), name: 'Protocol watch', brief: 'Summarize material source changes.', sources: ['https://ethereum.org/en/'], enabled: false, cadenceMinutes: 60, reviewerModel: null };
+  let fetches = 0; f.kit.research.reader = async url => { fetches++; return { url, text: 'Captured source text', fetchedAt: new Date().toISOString() }; };
+  const first = await f.request('/api/developer/v1/research/watchlists', { token, body: input }); assert.equal(first.status, 201);
+  const id = first.body.watchlist.id, path = `/api/developer/v1/research/watchlists/${id}`;
+  assert.equal((await f.request('/api/developer/v1/research/watchlists', { token, body: input })).body.watchlist.id, id);
+  assert.equal((await f.request('/api/developer/v1/research/watchlists', { token, body: { ...input, name: 'Changed' } })).status, 409);
+  for (const route of ['/api/developer/v1/research/watchlists', path, path + '/checks']) {
+    const denied = await f.request(route, { token: read, body: {} }); assert.equal(denied.status, 403); assert.equal(denied.body.code, 'INSUFFICIENT_SCOPE');
+  }
+  assert.equal((await f.request('/api/developer/v1/research', { token: write })).status, 403);
+  assert.equal((await f.request('/api/developer/v1/research?projectId=' + f.foreign.id, { token })).status, 400);
+  assert.equal((await f.request(path, { token, body: { enabled: true, projectId: f.sibling.id } })).status, 400);
+  const siblingWatch = f.kit.research.create(f.sibling.id, { ...input, requestKey: randomUUID(), name: 'Sibling only' });
+  for (const suffix of ['', '/checks']) assert.equal((await f.request(`/api/developer/v1/research/watchlists/${siblingWatch.id}${suffix}`, { token, body: suffix ? { requestKey: randomUUID() } : { enabled: true } })).status, 404);
+  const snapshot = await f.request('/api/developer/v1/research', { token: read }); assert.equal(snapshot.status, 200);
+  assert.deepEqual(snapshot.body.watchlists.map(watch => watch.id), [id]); assert.equal(snapshot.body.watchlists[0].snapshots, undefined);
+  assert.equal(fetches, 0); assert.equal(f.project.committed, 0); assert.equal(f.kit.store.data.jobs.length, 0);
+});
+
+test('developer research checks retain real evidence and replay keys without a second fetch or paid job', async t => {
+  const f = await apiFixture(t), token = f.issue().token; let value = 'Original captured content', fetches = 0;
+  f.kit.research.reader = async url => { fetches++; return { url, text: value, fetchedAt: new Date().toISOString(), responseBytes: Buffer.byteLength(value), possiblyTruncated: false }; };
+  const created = await f.request('/api/developer/v1/research/watchlists', { token, body: { requestKey: randomUUID(), name: 'Source history', brief: 'Explain changes with source evidence.', sources: ['https://ethereum.org/en/'], enabled: false, cadenceMinutes: 360 } });
+  assert.equal(created.status, 201); const path = `/api/developer/v1/research/watchlists/${created.body.watchlist.id}/checks`;
+  const check = requestKey => f.request(path, { token, body: { requestKey } });
+  const firstKey = randomUUID(), first = await check(firstKey); assert.equal(first.status, 200); assert.equal(first.body.check.status, 'baseline');
+  assert.equal((await check(firstKey)).body.check.id, first.body.check.id); assert.equal(fetches, 1);
+  const unchanged = await check(randomUUID()); assert.equal(unchanged.body.check.status, 'unchanged');
+  assert.equal(f.project.committed, 0); assert.equal(f.kit.store.data.jobs.length, 0);
+  value = 'Changed captured content'; const changedKey = randomUUID(), changed = await check(changedKey);
+  assert.equal(changed.status, 200); assert.equal(changed.body.check.status, 'changed');
+  assert.notEqual(changed.body.check.sources[0].beforeHash, changed.body.check.sources[0].afterHash);
+  assert.match(changed.body.check.sources[0].afterExcerpt, /Changed captured content/);
+  assert.equal(changed.body.check.report.status, 'queued', changed.body.check.report.error); assert.equal(f.project.committed, 1000);
+  assert.equal((await check(changedKey)).body.check.report.jobId, changed.body.check.report.jobId);
+  assert.equal(fetches, 3); assert.equal(f.kit.store.data.jobs.length, 1); assert.equal(f.project.committed, 1000);
+});

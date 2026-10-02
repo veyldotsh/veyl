@@ -55,3 +55,27 @@ test('SDK forwards bounded raw X text for official server-side weighting instead
   await f.client.prepareDraft({ channel: 'x', text, idempotencyKey: requestKey });
   assert.equal(JSON.parse(f.calls[0].init.body).text, text); assert.equal(f.calls.length, 1);
 });
+
+test('SDK research routes are fixed-project and require explicit bounded watch settings', async () => {
+  const f = fixture(() => new Response('{}'));
+  const settings = { requestKey, name: 'Protocol changes', brief: 'Explain material changes.', sources: ['https://ethereum.org/en/'], enabled: false, cadenceMinutes: 60, reviewerModel: null };
+  await f.client.research(); await f.client.createWatchlist(settings);
+  await f.client.updateWatchlist(requestKey, { enabled: true }); await f.client.checkWatchlist(requestKey, { requestKey });
+  assert.deepEqual(f.calls.map(call => new URL(call.url).pathname), ['/api/developer/v1/research', '/api/developer/v1/research/watchlists', `/api/developer/v1/research/watchlists/${requestKey}`, `/api/developer/v1/research/watchlists/${requestKey}/checks`]);
+  assert.deepEqual(JSON.parse(f.calls[1].init.body), settings);
+  assert.deepEqual(JSON.parse(f.calls[2].init.body), { enabled: true });
+  assert.deepEqual(JSON.parse(f.calls[3].init.body), { requestKey });
+  const bad = [undefined, { ...settings, enabled: undefined }, { ...settings, projectId: 'other' }, { ...settings, sources: ['http://ethereum.org'] }, { ...settings, sources: ['https://user:pass@ethereum.org'] }, { ...settings, sources: [] }, { ...settings, cadenceMinutes: 1 }];
+  for (const value of bad) assert.throws(() => f.client.createWatchlist(value));
+  assert.throws(() => f.client.updateWatchlist('../funding', { enabled: true }));
+  assert.throws(() => f.client.updateWatchlist(requestKey, {}));
+  assert.throws(() => f.client.checkWatchlist(requestKey, { requestKey, projectId: 'other' }));
+  assert.equal(f.calls.length, 4);
+});
+
+test('SDK never repeats an uncertain research check or settings update', async () => {
+  const f = fixture(() => { throw Error('network lost'); });
+  await assert.rejects(f.client.checkWatchlist(requestKey, { requestKey }), error => error.uncertain === true);
+  await assert.rejects(f.client.updateWatchlist(requestKey, { enabled: false }), error => error.uncertain === true);
+  assert.equal(f.calls.length, 2);
+});

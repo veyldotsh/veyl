@@ -18,14 +18,15 @@ async function sessionBootstrap() {
   return true;
 }
 function renderSignIn(message = '') {
+  researchPanel?.destroy(); researchPanel = null; researchPanelGeneration++;
   socialPanel?.destroy(); socialPanel = null; socialPanelGeneration++; mainnetPanel?.destroy(); mainnetPanel = null; mainnetPanelGeneration++;
   runwayPanel?.destroy(); runwayPanel = null; runwayPanelGeneration++;
   developerPanel?.destroy(); developerPanel = null; developerPanelGeneration++;
   state = null;
   document.querySelectorAll('[data-launch], .sidebar .nav').forEach(el => el.disabled = true);
   $('project-nav').innerHTML = ''; $('job-count').textContent = '0';
-  $('mode').hidden = true; $('mode').textContent = ''; $('runtime-status').textContent = 'Sign in to continue';
-  $('wallet-control').textContent = 'Connect wallet'; $('chain-label').textContent = 'Ethereum';
+  $('mode').hidden = true; $('mode').textContent = ''; $('runtime-status').hidden = true; $('runtime-status').textContent = '';
+  $('wallet-control').textContent = 'Connect wallet';
   $('content').innerHTML = `<section class="signin-panel"><img src="/logo.svg" alt="" width="64" height="64"><p class="eyebrow">YOUR IDEAS HAVE A HOME.</p><h1>Welcome to Veyl.</h1><p>One workspace for your agents, their memory and the work they deliver.</p><button class="button" data-signin>Connect & sign in ↗</button><p class="hint">Sign an ownership message with your Ethereum wallet. Signing in costs no gas and sends no transaction.</p><p class="hint">On mobile, open veyl.sh in your Ethereum wallet’s browser.</p>${message ? `<p class="error" role="alert">${esc(message)}</p>` : ''}<a class="text-link" href="/market">View the public VEYL market →</a><br><a class="text-link" href="/docs#start">Get to know Veyl →</a></section>`;
 }
 async function signIn(button) {
@@ -111,4 +112,14 @@ async function loadDeveloperPanel(p) {
     if (generation !== developerPanelGeneration || selected !== p.id || $('developer-panel') !== element || !state) return;
     developerPanel = mountDeveloperPanel(element, { project: p, hosted: state.hosted === true, api, notify: toast });
   } catch (error) { if (generation === developerPanelGeneration && $('developer-panel') === element) element.textContent = error.message; }
+}
+
+async function loadResearchPanel(p) {
+  const element = $('research-panel'), generation = researchPanelGeneration;
+  if (!element || !p) return;
+  try {
+    const { mountResearchPanel } = await import('/research-panel.js');
+    if (generation !== researchPanelGeneration || selected !== p.id || $('research-panel') !== element || !state) return;
+    researchPanel = mountResearchPanel(element, { project: p, hosted: state.hosted === true, mode: state.mode, api, notify: toast });
+  } catch (error) { if (generation === researchPanelGeneration && $('research-panel') === element) element.textContent = error.message; }
 }

@@ -52,6 +52,10 @@ export class VeylClient {
   job(id) { if (!ID.test(id || '')) throw new TypeError('Invalid job ID.'); return this.#request(`jobs/${encodeURIComponent(id)}`); }
   submitJob({ requestKey, prompt } = {}) { key(requestKey); text(prompt, 8000, 'prompt'); return this.#request('jobs', { requestKey, prompt }); }
   memory() { return this.#request('memory'); }
+  research() { return this.#request('research'); }
+  createWatchlist(input) { watchInput(input, true); return this.#request('research/watchlists', input); }
+  updateWatchlist(id, input) { watchId(id); watchInput(input, false); return this.#request(`research/watchlists/${id}`, input); }
+  checkWatchlist(id, input) { watchId(id); fields(input, ['requestKey'], ['requestKey']); key(input.requestKey); return this.#request(`research/watchlists/${id}/checks`, input); }
   saveMemory({ requestKey, content } = {}) { key(requestKey); text(content, 8000, 'content'); return this.#request('memory', { requestKey, content }); }
   drafts() { return this.#request('drafts'); }
   prepareDraft({ channel, text: content, idempotencyKey, madeWithAi = true } = {}) {
@@ -62,3 +66,25 @@ export class VeylClient {
 }
 function key(value) { if (typeof value !== 'string' || !/^[A-Za-z0-9-]{16,80}$/.test(value)) throw new TypeError('Use an 16 to 80 character request key containing letters, digits or hyphen; a UUID is recommended.'); }
 function text(value, maximum, name) { if (typeof value !== 'string' || !value.trim() || value.length > maximum) throw new TypeError(`${name} must contain 1 to ${maximum} characters.`); }
+function fields(input, allowed, required = []) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || required.some(name => !Object.hasOwn(input, name)) || Object.keys(input).some(name => !allowed.includes(name))) throw new TypeError('Unexpected or missing watchlist fields.');
+}
+function watchId(value) { if (typeof value !== 'string' || !/^[a-f0-9-]{36}$/.test(value)) throw new TypeError('Invalid watchlist ID.'); }
+function watchInput(input, create) {
+  const mutable = ['name', 'brief', 'sources', 'enabled', 'cadenceMinutes', 'reviewerModel'];
+  fields(input, create ? ['requestKey', ...mutable] : mutable, create ? ['requestKey', ...mutable.slice(0, 5)] : []);
+  if (!Object.keys(input).length) throw new TypeError('Include at least one watchlist setting.');
+  if (create) key(input.requestKey);
+  if (Object.hasOwn(input, 'name')) text(input.name, 80, 'name');
+  if (Object.hasOwn(input, 'brief')) text(input.brief, 1200, 'brief');
+  if (Object.hasOwn(input, 'enabled') && typeof input.enabled !== 'boolean') throw new TypeError('enabled must be an explicit boolean.');
+  if (Object.hasOwn(input, 'cadenceMinutes') && ![60, 360, 1440].includes(input.cadenceMinutes)) throw new TypeError('Choose a 60, 360 or 1440 minute cadence.');
+  if (Object.hasOwn(input, 'reviewerModel') && input.reviewerModel !== null) text(input.reviewerModel, 256, 'reviewerModel');
+  if (Object.hasOwn(input, 'sources')) {
+    if (!Array.isArray(input.sources) || input.sources.length < 1 || input.sources.length > 3) throw new TypeError('Choose one to three approved HTTPS sources.');
+    for (const source of input.sources) {
+      text(source, 1024, 'source'); let url; try { url = new URL(source); } catch { throw new TypeError('Invalid source URL.'); }
+      if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) throw new TypeError('Sources require HTTPS without credentials, custom ports or fragments.');
+    }
+  }
+}
