@@ -875,7 +875,7 @@ index 5c69960..14b3c1f 100644
      async fn session_events_are_authenticated_browser_blocked_and_no_store() {
          let directory = tempfile::tempdir().unwrap();
 diff --git a/crates/zkapi-clientd/src/service.rs b/crates/zkapi-clientd/src/service.rs
-index 2334584..65abf9a 100644
+index 2334584..cf0735c 100644
 --- a/crates/zkapi-clientd/src/service.rs
 +++ b/crates/zkapi-clientd/src/service.rs
 @@ -637,6 +637,7 @@ impl AuthService {
@@ -1013,7 +1013,7 @@ index 2334584..65abf9a 100644
                  .await?;
              let lease = lease_slot
                  .as_mut()
-@@ -1759,6 +1799,7 @@ impl AuthService {
+@@ -1759,15 +1799,24 @@ impl AuthService {
          &self,
          session_id: String,
          request_limit_micro_usd: Option<u128>,
@@ -1021,7 +1021,10 @@ index 2334584..65abf9a 100644
      ) -> Result<ActiveOpenRouterLease, AuthError> {
          let mut retried_stale_root = false;
          let mut reconciled_lost_key = false;
-@@ -1768,6 +1809,14 @@ impl AuthService {
+         let mut refreshed_native_quote = false;
+         loop {
+-            let request = self.prepare_direct_lease_request(request_limit_micro_usd).await?;
++            let request = self.prepare_direct_lease_request_for_call(request_limit_micro_usd, call_id.map(str::to_owned)).await?;
              if let Some(limit) = request_limit_micro_usd {
                  self.check_request_budget(&request, limit)?;
              }
@@ -1029,7 +1032,7 @@ index 2334584..65abf9a 100644
 +            // fsynced before a server can accept this authorization. A lost
 +            // reply can therefore only leave a recoverable, attributable call.
 +            if let Some(id) = call_id {
-+                crate::oa_accounting::bind(&self.config, id, &request.client_request_id, &request)?;
++                crate::oa_accounting::binding_for_request(&self.config, id, &request.client_request_id)?;
 +            } else {
 +                crate::oa_accounting::require_unbound_request(&self.config, &request.client_request_id)?;
 +            }
@@ -1048,7 +1051,48 @@ index 2334584..65abf9a 100644
                  if !refreshed_native_quote && self.config.billing_asset == "native_eth"
                      && matches!(error.error_code.as_str(), "native_quote_expired" | "native_quote_superseded") {
                      self.refresh_unaccepted_native_request(request.clone()).await?;
-@@ -4146,6 +4200,46 @@ mod oa_native_recovery_tests {
+@@ -2004,6 +2058,10 @@ impl AuthService {
+     }
+ 
+     async fn prepare_direct_lease_request(&self, request_limit_micro_usd: Option<u128>) -> Result<ApiRequestV2, AuthError> {
++        self.prepare_direct_lease_request_for_call(request_limit_micro_usd, None).await
++    }
++
++    async fn prepare_direct_lease_request_for_call(&self, request_limit_micro_usd: Option<u128>, call_id: Option<String>) -> Result<ApiRequestV2, AuthError> {
+         let config = self.config.clone();
+         let wallet_mutex = self.wallet_mutex.clone();
+         let indexer = self.indexer.clone();
+@@ -2027,6 +2085,11 @@ impl AuthService {
+                         "a non-lease zkAPI request is still pending".to_string(),
+                     ));
+                 }
++                if let Some(id) = call_id.as_deref() {
++                    // Never attribute an old legacy authorization to a new
++                    // application call after a restart or interrupted proof.
++                    crate::oa_accounting::binding_for_request(&config, id, &request.client_request_id)?;
++                }
+                 return Ok(request);
+             }
+             let state = wallet.state().ok_or(AuthError::NoActiveNote)?;
+@@ -2043,9 +2106,15 @@ impl AuthService {
+                 serde_json::json!({"mode":"openrouter_ephemeral_lease","version":1,"billing_quote":quote}).to_string()
+             } else { authorization };
+             let payload_hash = compute_payload_hash(authorization.as_bytes());
+-            wallet
++            let request = wallet
+                 .prepare_request(&authorization, payload_hash, active_root, siblings)
+-                .map_err(Into::into)
++                .map_err(AuthError::from)?;
++            // Keep the wallet lock until the application/native association is
++            // durable. Recovery cannot race between preparation and binding.
++            if let Some(id) = call_id.as_deref() {
++                crate::oa_accounting::bind(&config, id, &request.client_request_id, &request)?;
++            }
++            Ok(request)
+         })
+         .await
+     }
+@@ -4146,6 +4215,51 @@ mod oa_native_recovery_tests {
          }
      }
  
@@ -1074,6 +1118,11 @@ index 2334584..65abf9a 100644
 +            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 +            let service = AuthService::new(config.clone()).unwrap();
 +            crate::oa_accounting::reserve(&config, &call, 1_000_000).unwrap();
++            // An old unowned native journal can never be assigned to this new
++            // application call. A proper preparation binds while wallet-locked.
++            assert!(service.issue_direct_openrouter_lease("oa-single-use".into(), Some(1_000_000), Some(&call)).await.is_err());
++            assert_eq!(hits.load(Ordering::SeqCst), 0);
++            crate::oa_accounting::bind(&config, &call, &request.client_request_id, &request).unwrap();
 +            assert!(service.issue_direct_openrouter_lease("oa-single-use".into(), Some(1_000_000), Some(&call)).await.is_err());
 +            assert_eq!(hits.load(Ordering::SeqCst), 1, "{error_code}");
 +            assert_eq!(service.oa_call_settlement(call.clone()).await.unwrap().unwrap()["status"], "bound");

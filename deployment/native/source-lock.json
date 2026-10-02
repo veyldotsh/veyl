@@ -19,8 +19,8 @@
     {
       "name": "companion",
       "path": "deployment/native/companion-accounting.patch",
-      "bytes": 48421,
-      "sha256": "94804a67aada5e61be9ca1f7a649abdaef494bb08e17fb1c719d26ee1ccf5ef9",
+      "bytes": 51227,
+      "sha256": "2207864f1e6f3554f5231310134dcb95d0cd80eafa02b0d69cc08fa91cad1345",
       "files": [
         {
           "path": "crates/zkapi-clientd/src/lib.rs",
@@ -35,7 +35,7 @@
         {
           "path": "crates/zkapi-clientd/src/service.rs",
           "originalSha256LF": "42eb203dbb1f089965bea258660c1edff573ba3886d38d59d2c34381721bdbc1",
-          "patchedSha256LF": "57ee7c23d8a4465e38317555155adc7f1ea6a55ba46bc46d09c9d5c585a52d66"
+          "patchedSha256LF": "259725473d7c28b56ba300f474068521839d865000976dbe46f2d6acdd28a2e7"
         },
         {
           "path": "crates/zkapi-clientd/src/oa_accounting.rs",
@@ -75,8 +75,8 @@
     {
       "name": "go",
       "path": "deployment/native/go-accounting.patch",
-      "bytes": 27015,
-      "sha256": "c9b10fc51ee6d88db839778113a69d9eee8677bb3d9aea4ce3767af220790ff5",
+      "bytes": 31621,
+      "sha256": "8ac6133bc11e9983d62e492497e1894cf02b213693ec6f556e65135f893ad977",
       "files": [
         {
           "path": "zkapi-clientd/internal/accounting/context.go",
@@ -96,12 +96,12 @@
         {
           "path": "zkapi-clientd/internal/zkapi/call_accounting.go",
           "originalSha256LF": null,
-          "patchedSha256LF": "da25747a05f6f7cf8123432935e97cf1731fcbaacd7474ab0600a58f95f65bcc"
+          "patchedSha256LF": "0feb38fd274a4963b00ddb04d09bc925c444213273f23808f79a5728d3c08386"
         },
         {
           "path": "zkapi-clientd/internal/zkapi/call_accounting_test.go",
           "originalSha256LF": null,
-          "patchedSha256LF": "78a0f84cc50d09f89771db079fdcd78f5fae413fdea33cdbd1f9ae83d81208d6"
+          "patchedSha256LF": "ebcafa5d2bb71de7dd5e60d798b314331a7453021912a15d247063a310cb7053"
         },
         {
           "path": "zkapi-clientd/internal/zkapi/client.go",

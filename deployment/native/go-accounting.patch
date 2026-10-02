@@ -224,10 +224,10 @@ index 3c2117b..0b41ae4 100644
  	// client and cancel its queued request without spending anonymous access.
 diff --git a/zkapi-clientd/internal/zkapi/call_accounting.go b/zkapi-clientd/internal/zkapi/call_accounting.go
 new file mode 100644
-index 0000000..ee3496f
+index 0000000..2289259
 --- /dev/null
 +++ b/zkapi-clientd/internal/zkapi/call_accounting.go
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,247 @@
 +package zkapi
 +
 +import (
@@ -238,6 +238,7 @@ index 0000000..ee3496f
 +	"regexp"
 +	"strconv"
 +	"strings"
++	"time"
 +
 +	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
 +)
@@ -402,19 +403,25 @@ index 0000000..ee3496f
 +	if id.JournalID != admission.JournalID {
 +		return providerLease{}, accountingError()
 +	}
++	// A tracked call owns one lease and cannot reuse an old provider credential.
++	c.cachedLease = nil
++	if c.leaseGroup != nil && !c.leaseGroup.attempted {
++		if err := c.settleGroup(ctx); err != nil && !isPendingSettlement(err) {
++			return providerLease{}, err
++		}
++	}
++	// The native service's background reconciler fetches signed settlement
++	// every five seconds. Poll only local readiness before assigning this ID to
++	// an issuance. Never repeat a retirement or a lease authorization here.
++	if err := c.waitTrackedReadiness(ctx); err != nil {
++		return providerLease{}, err
++	}
 +	limit, err := c.requestBudget(ctx, body)
 +	if err != nil {
 +		return providerLease{}, err
 +	}
 +	if limit > admission.ReservedMicroUSD {
 +		return providerLease{}, accountingError()
-+	}
-+	// A tracked call owns one lease and cannot reuse an old provider credential.
-+	c.cachedLease = nil
-+	if c.leaseGroup != nil && !c.leaseGroup.attempted {
-+		if err := c.settleGroup(ctx); err != nil {
-+			return providerLease{}, err
-+		}
 +	}
 +	request, _ := json.Marshal(map[string]any{"request_limit_micro_usd": limit, "call_id": admission.CallID})
 +	raw, err := c.request(ctx, http.MethodPost, "/oa/v1/lease", request)
@@ -437,12 +444,43 @@ index 0000000..ee3496f
 +	}
 +	return lease, nil
 +}
++
++func (c *Client) waitTrackedReadiness(ctx context.Context) error {
++	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
++	defer cancel()
++	for {
++		raw, err := c.request(ctx, http.MethodGet, "/wallet/status", nil)
++		if err != nil {
++			return err
++		}
++		var wallet struct {
++			HasNote *bool `json:"has_note"`
++			Pending *bool `json:"pending_request"`
++		}
++		if json.Unmarshal(raw, &wallet) != nil || wallet.HasNote == nil || wallet.Pending == nil {
++			return accountingError()
++		}
++		if !*wallet.HasNote {
++			return &Error{http.StatusPaymentRequired, "funding_required"}
++		}
++		if !*wallet.Pending {
++			return nil
++		}
++		timer := time.NewTimer(c.settlementPoll)
++		select {
++		case <-ctx.Done():
++			timer.Stop()
++			return ctx.Err()
++		case <-timer.C:
++		}
++	}
++}
 diff --git a/zkapi-clientd/internal/zkapi/call_accounting_test.go b/zkapi-clientd/internal/zkapi/call_accounting_test.go
 new file mode 100644
-index 0000000..2ae29c1
+index 0000000..4dbafa2
 --- /dev/null
 +++ b/zkapi-clientd/internal/zkapi/call_accounting_test.go
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,255 @@
 +package zkapi
 +
 +import (
@@ -497,6 +535,8 @@ index 0000000..2ae29c1
 +				return
 +			}
 +			_ = json.NewEncoder(w).Encode(map[string]any{"api_key": "tracked-private-key", "base_url": upstream.URL, "expires_at": time.Now().Unix() + 60, "verified": true, "verification_status": "verified", "accounting": testBinding()})
++		case "/wallet/status":
++			_, _ = io.WriteString(w, `{ "has_note": true, "pending_request": false }`)
 +		case "/wallet/settle":
 +			settlements++
 +			_, _ = io.WriteString(w, `{"pending_request":false}`)
@@ -529,6 +569,10 @@ index 0000000..2ae29c1
 +			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
 +			defer upstream.Close()
 +			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/wallet/status" {
++					_, _ = io.WriteString(w, `{ "has_note": true, "pending_request": false }`)
++					return
++				}
 +				if r.URL.Path == "/oa/v1/accounting" {
 +					_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
 +					return
@@ -551,6 +595,10 @@ index 0000000..2ae29c1
 +	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("provider called") }))
 +	defer upstream.Close()
 +	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/wallet/status" {
++			_, _ = io.WriteString(w, `{ "has_note": true, "pending_request": false }`)
++			return
++		}
 +		if r.URL.Path == "/oa/v1/accounting" {
 +			_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
 +			return
@@ -570,6 +618,10 @@ index 0000000..2ae29c1
 +			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("provider called") }))
 +			defer upstream.Close()
 +			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/wallet/status" {
++					_, _ = io.WriteString(w, `{ "has_note": true, "pending_request": false }`)
++					return
++				}
 +				if r.URL.Path == "/oa/v1/accounting" {
 +					_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
 +					return
@@ -612,6 +664,76 @@ index 0000000..2ae29c1
 +				t.Fatal("secret forwarded")
 +			}
 +		})
++	}
++}
++
++func TestTrackedWaitsForPriorSignedRecoveryBeforeOneLeaseAuthorization(t *testing.T) {
++	var reads, leases, retirements, calls int
++	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; _, _ = io.WriteString(w, `{"choices":[]}`) }))
++	defer upstream.Close()
++	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++		switch r.URL.Path {
++		case "/oa/v1/accounting":
++			_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
++		case "/wallet/settle":
++			retirements++
++			w.WriteHeader(409)
++			_, _ = io.WriteString(w, `{"code":"pending_request"}`)
++		case "/wallet/status":
++			reads++
++			_ = json.NewEncoder(w).Encode(map[string]any{"has_note": true, "pending_request": reads < 3})
++		case "/oa/v1/lease":
++			leases++
++			if reads < 3 {
++				t.Error("lease authorized before settlement")
++			}
++			_ = json.NewEncoder(w).Encode(map[string]any{"api_key": "next-round-key", "base_url": upstream.URL, "expires_at": time.Now().Unix() + 60, "verified": true, "verification_status": "verified", "accounting": testBinding()})
++		default:
++			t.Errorf("unexpected path%s", r.URL.Path)
++		}
++	}, upstream)
++	client.leaseGroup = &leaseGroup{serial: 1, until: time.Now()}
++	client.keySerial = 1
++	client.settlementPoll = time.Millisecond
++	response, err := client.Complete(trackedContext(1001000), json.RawMessage(`{"model":"example/model"}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	_, _ = io.Copy(io.Discard, response.Body)
++	_ = response.Body.Close()
++	if reads != 3 || retirements != 1 || leases != 1 || calls != 1 {
++		t.Fatalf("reads%d retire%d leases%d calls%d", reads, retirements, leases, calls)
++	}
++}
++
++func TestTrackedCanceledReadinessDoesNotAuthorizeOrRepeatRetirement(t *testing.T) {
++	leases, retirements := 0, 0
++	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("provider called") }))
++	defer upstream.Close()
++	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++		switch r.URL.Path {
++		case "/oa/v1/accounting":
++			_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
++		case "/wallet/settle":
++			retirements++
++			w.WriteHeader(409)
++			_, _ = io.WriteString(w, `{"code":"pending_request"}`)
++		case "/wallet/status":
++			_, _ = io.WriteString(w, `{"has_note":true,"pending_request":true}`)
++		case "/oa/v1/lease":
++			leases++
++			t.Error("authorized pending call")
++		}
++	}, upstream)
++	client.leaseGroup = &leaseGroup{serial: 1, until: time.Now()}
++	client.settlementPoll = time.Millisecond
++	ctx, cancel := context.WithTimeout(trackedContext(1001000), 20*time.Millisecond)
++	defer cancel()
++	if _, err := client.Complete(ctx, json.RawMessage(`{"model":"example/model"}`)); err == nil {
++		t.Fatal("pending wallet dispatched")
++	}
++	if leases != 0 || retirements != 1 {
++		t.Fatalf("leases%d retirements%d", leases, retirements)
 +	}
 +}
 diff --git a/zkapi-clientd/internal/zkapi/client.go b/zkapi-clientd/internal/zkapi/client.go
