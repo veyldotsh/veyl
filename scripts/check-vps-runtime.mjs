@@ -8,7 +8,7 @@ import { TenantRegistry, createProductionApp } from '../src/production.mjs';
 import { MainnetMarkets } from '../src/mainnet.mjs';
 import { WalletAuth } from '../src/auth.mjs';
 import { GatewayVerifier } from '../src/gateway-auth.mjs';
-import { runtimeSmokeScope, checkSmokeCatalog, requireSmokeAccounting } from './runtime-smoke-scope.mjs';
+import { runtimeSmokeScope, acquireSmokeRuntime, checkSmokeCatalog, requireSmokeAccounting } from './runtime-smoke-scope.mjs';
 
 const scope = runtimeSmokeScope(process.argv.slice(2));
 const { base } = installationPaths();
@@ -46,7 +46,7 @@ function footprint(pid, seen = new Set()) {
 }
 try {
   const kit = registry.get(owner), project = kit.create({ requestKey: randomUUID(), name: 'Runtime acceptance', symbol: 'QA', purpose: 'Unfunded daemon health check only; do not perform inference or transactions.', template: 'research', swarm: false, model: 'pending', total: 1000000, daily: 1000000, request: 500000 });
-  const runtime = await registry.provision(owner, project);
+  const runtime = await acquireSmokeRuntime(registry, owner, project, scope);
   const entry = registry.configuration.data.projects[0]; ports.push(Number(new URL(entry.origin).port), entry.companionPort);
   const health = await runtime.provider.diagnostics({ expectedNetwork: 'mainnet' }), catalog = await checkSmokeCatalog(runtime.provider, scope), funding = await runtime.funding.inspect();
   if (!health.reachable || funding.funding.chainId !== 1 || !['ready', 'waiting_funds'].includes(funding.funding.phase)) throw new Error('Unfunded daemon acceptance failed.');

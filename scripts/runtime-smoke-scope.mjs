@@ -6,6 +6,12 @@ export function runtimeSmokeScope(args = []) {
   throw new Error('Expected no arguments or exactly --recovery-only.');
 }
 
+export async function acquireSmokeRuntime(registry, owner, project, scope) {
+  if (scope === 'wallet-recovery') return registry.ready(owner, project.id);
+  if (scope === 'full') return registry.provision(owner, project);
+  throw new Error('Unknown runtime acceptance scope.');
+}
+
 export async function checkSmokeCatalog(provider, scope) {
   if (scope === 'wallet-recovery') return { acceptanceScope: scope, catalogChecked: false, modelCatalogReady: null, modelCount: null, inferenceReady: false };
   if (scope !== 'full') throw new Error('Unknown runtime acceptance scope.');

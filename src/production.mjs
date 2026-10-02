@@ -310,9 +310,15 @@ export class TenantRegistry {
     kit.store.save();
   }
   async ready(owner, projectId) {
-    const project = this.get(owner).project(projectId);
-    if (!this.provisioner.children.has(projectId)) return this.provision(owner, project);
-    return this.runtime(owner, projectId);
+    this.get(owner).project(projectId);
+    // Funding and signed-settlement recovery require the pinned, authenticated
+    // wallet runtime, even while public model policy is unavailable. Explicit
+    // model provisioning and job admission retain their separate catalog checks.
+    const ownerKey = owner.toLowerCase(); this.backgroundOwners.set(ownerKey, (this.backgroundOwners.get(ownerKey) || 0) + 1);
+    try {
+      await this.provisioner.provision(owner, projectId);
+      return this.runtime(owner, projectId);
+    } finally { this.backgroundOwners.set(ownerKey, this.backgroundOwners.get(ownerKey) - 1); }
   }
   social(owner, projectId) {
     this.get(owner).project(projectId);

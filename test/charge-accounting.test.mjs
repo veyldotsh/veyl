@@ -21,6 +21,17 @@ test('zero and full native-cap receipts preserve exact units without cost clampi
   const zero = fixtureCharge({ charge: '0' }); assert.equal(applySettlement(zero.call, zero.report), 501000); assert.equal(zero.call.chargeWei, '0');
   const full = fixtureCharge({ charge: '166667' }); assert.equal(applySettlement(full.call, full.report), 999); assert.equal(full.call.valuationMicroUsd, 500001);
 });
+
+test('canonical padded receipt releases a held call once while a raw native short hash stays rejected', () => {
+  const { call, report } = fixtureCharge({ charge: '3604' });
+  report.receipt.receipt_id = '0x' + 'a'.repeat(63);
+  assert.throws(() => applySettlement(call, report)); assert.equal(call.status, 'pending');
+  report.receipt.receipt_id = '0x0' + 'a'.repeat(63);
+  const released = applySettlement(call, report);
+  assert.equal(call.chargeWei, '3604000000000'); assert.equal(call.valuationMicroUsd, 10812);
+  assert.equal(released, call.reservedMicroUsd - 10812); assert.equal(applySettlement(call, report), 0);
+  assert.equal(call.report.receipt.receipt_id, '0x0' + 'a'.repeat(63));
+});
 test('mismatched call, session, journal, quote, cap and receipt never release budget', () => {
   const mutations = [r => r.call_id = randomUUID(), r => r.journal_id = 'e'.repeat(32), r => r.binding.request_limit_micro_usd = '1', r => r.binding.billing_quote.feed_address = '0x' + 'f'.repeat(40), r => r.binding.billing_quote.answer = '0300000000000', r => r.binding.billing_quote.chain_id = 11155111, r => r.binding.billing_quote.expires_at = 1799999999, r => r.binding.cap_units = '100000000', r => r.receipt.charge_units = '166668', r => r.receipt.balance_units = '-1', r => r.receipt.receipt_id = 'invalid'];
   for (const mutate of mutations) { const { call, report } = fixtureCharge(); mutate(report); assert.throws(() => applySettlement(call, report)); assert.equal(call.status, 'pending'); }

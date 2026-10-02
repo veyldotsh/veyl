@@ -5,6 +5,7 @@ const when = value => new Date(value).toLocaleTimeString([], { hour: '2-digit', 
 const glyph = type => ({ research: '◈', builder: '⌘', community: '✳' }[type] || '◈');
 let state, models = [], chain = {}, view = 'home', selected = null, tab = 'runtime', step = 0, creating = false, toastTimer;
 let launchKey = crypto.randomUUID(), pendingRender = false;
+let deliveredFormatter = null;
 let researchPanel = null, researchPanelGeneration = 0;
 const featurePanels = new Map(); let featurePanelGeneration = 0;
 function destroyFeaturePanels() { featurePanelGeneration++; for (const panel of featurePanels.values()) panel.destroy(); featurePanels.clear(); }
@@ -32,6 +33,8 @@ function renderShell() {
   document.querySelectorAll('.nav').forEach(el => el.classList.toggle('active', el.dataset.view === view));
   const liveProject = state.projects.find(p => p.id === selected);
   if (view === 'project' && liveProject && $('project-stats')) $('project-stats').innerHTML = stats(liveProject);
+  const deliverablesTab = view === 'project' && liveProject && document.querySelector('[data-tab="deliverables"]');
+  if (deliverablesTab) deliverablesTab.textContent = `Deliverables (${liveProject.artifacts.length})`;
   $('page-title').textContent = view === 'home' ? 'Overview' : view === 'platform' ? 'VEYL market' : view === 'jobs' ? 'Activity' : view === 'tools' ? 'Tools & connections' : state.projects.find(p => p.id === selected)?.name || 'Agent';
 }
 function pageList(items, key, size, item, empty = '') {
@@ -61,6 +64,18 @@ function jobCard(job) {
   const p = state.projects.find(p => p.id === job.projectId);
   return `<article class="job"><div class="job-top"><span>${esc(p?.name)} · ${when(job.at)}</span><span class="status ${job.status}">${esc(job.status)}</span></div>${job.prompt.length > 180 ? `<details class="task-prompt"><summary>${esc(job.prompt.slice(0, 180))}…</summary><p>${esc(job.prompt)}</p></details>` : `<div class="job-title">${esc(job.prompt)}</div>`}<div class="steps">${job.steps.map(s => `<span class="step ${s.status}">${s.status === 'completed' ? '✓' : s.status === 'running' ? '◌' : '○'} ${esc(s.role)}</span>`).join('')}</div><small>${money(job.reservation)} ${job.mode === 'demo' ? 'simulated / reserved' : 'committed'} · ${job.mode === 'demo' ? 'Deterministic demo' : 'zkAPI'}</small>${jobAccounting(job)}${job.error ? `<p class="error">${esc(job.error)}</p>` : ''}${job.steps.filter(s => s.output).map(s => `<details><summary>${esc(s.role)} output · ${esc(s.verification)}</summary><pre>${esc(s.output)}</pre></details>`).join('')}${job.artifactId ? `<p><a class="text-link" href="/api/artifacts/${job.artifactId}">Download deliverable ↗</a></p>` : ''}</article>`;
 }
+async function loadDeliveredFormatter() {
+  if (!deliveredFormatter) {
+    try { deliveredFormatter = (await import('/public-agent.js')).formatPublicResult; } catch {}
+  }
+}
+function deliveredArtifact(artifact) {
+  let content = `<pre>${esc(artifact.content)}</pre>`;
+  if (deliveredFormatter) {
+    try { content = `<div class="public-result-content delivered-result">${deliveredFormatter(artifact.content)}</div>`; } catch {}
+  }
+  return `<article class="artifact"><h3>${esc(artifact.title)}</h3><span class="badge">${artifact.mode === 'demo' ? 'SIMULATED OUTPUT' : 'MODEL OUTPUT'}</span><details><summary>Read deliverable</summary>${content}</details><a href="/api/artifacts/${artifact.id}">Download Markdown ↗</a></article>`;
+}
 function feeRevenuePanel(p) {
   const allocation = state.feeAllocation;
   if (!allocation) return '';
@@ -82,7 +97,7 @@ function renderProject() {
   if (tab === 'treasury' && state.hosted) return header + hostedTreasury(p);
   if (tab === 'treasury') return header + feeRevenuePanel(p) + `<div class="two-col"><section class="panel"><h2>Token & operating treasury</h2><p class="subtext">Local chain 31337 · development assets only</p>${p.chain ? `<details><summary>Token, treasury & owner addresses</summary><label>Project token</label><div class="address">${p.chain.token}</div><label>Operating treasury</label><div class="address">${p.chain.treasury}</div><label>Owner</label><div class="address">${p.chain.owner}</div></details><p class="hint">${p.chain.hook ? '1B fixed supply. The seeded inventory is locked in the pool; the creator holds the remaining tokens.' : 'Earlier token setup: 1B fixed supply held by the local owner; no trading pool.'}</p><div class="info-box">Treasury balance: <strong id="eth-balance">Checking…</strong> development ETH<br>Operator daily limit: 0.01 ETH. No spending recipients approved by default.</div><button class="button secondary" data-action="fund">Add 0.01 development ETH</button>` : `<div class="empty"><b>Ready for its own treasury.</b>Create a fixed-supply token and operating vault on your local Anvil node.</div><button class="button" data-action="deploy" ${chain.ready ? '' : 'disabled'}>Deploy local token & treasury ↗</button>`}<div class="info-box">The owner can withdraw operating funds. Market liquidity is locked separately. Local ETH does not fund the live zkAPI wallet.</div></section><section class="panel"><h2>Funding activity</h2><p class="subtext">Recorded treasury deposits, market launches and fee distributions.</p>${pageList(p.events.slice().reverse(), 'funding-' + p.id, 4, e => `<div class="activity-row"><time>${when(e.at)}</time>${e.message.length > 120 ? `<details><summary>${esc(e.message.slice(0, 115))}…</summary><p>${esc(e.message)}</p></details>` : `<p>${esc(e.message)}</p>`}</div>`)}</section></div>`;
   if (tab === 'memory') return header + `<div class="two-col"><section class="panel"><h2>Shared memory</h2><p class="subtext">The latest eight notes and two deliverables enter each new task.</p><form id="memory-form"><label>Add project context<textarea name="content" required maxlength="8000" placeholder="Decisions, facts, preferences, or context your team should remember."></textarea></label><button class="button" type="submit">Save to memory</button></form>${pageList(p.notes.slice().reverse(), 'notes-' + p.id, 5, n => `<details class="memory-note"><summary>${esc(n.content.slice(0, 100))}${n.content.length > 100 ? '…' : ''}</summary><p>${esc(n.content)}</p></details>`)}</section><section class="panel"><h2>Source library</h2><p class="subtext">Fetch a document from a reviewed public domain. The most recent three enter the model context.</p><form id="source-form"><label>Public source URL<input name="url" type="url" required placeholder="https://zkapi.openanonymity.ai/docs"></label><button class="button secondary" type="submit">Read & attach source ↗</button></form><p class="hint">Allowed: ${state.sourceHosts.map(esc).join(', ')}. Redirects are refused.</p>${pageList(p.sources.slice().reverse(), 'sources-' + p.id, 5, s => `<div class="artifact"><a class="source-url" href="${esc(s.url)}" target="_blank" rel="noreferrer">${esc(s.url)}</a><p class="hint">Read ${new Date(s.fetchedAt).toLocaleString()} · ${s.text.length.toLocaleString()} characters</p><details><summary>Inspect captured text</summary><pre>${esc(s.text)}</pre></details></div>`)}</section></div>`;
-  return header + `<div id="showcase-panel">Reading public sharing settings…</div><section class="panel"><h2>Delivered work</h2><p class="subtext">${state.hosted ? 'Saved privately in your encrypted workspace.' : 'Outputs stay local. Demo artifacts are clearly labelled.'}</p>${pageList(p.artifacts.slice().reverse(), 'artifacts-' + p.id, 5, a => `<article class="artifact"><h3>${esc(a.title)}</h3><span class="badge">${a.mode === 'demo' ? 'SIMULATED OUTPUT' : 'MODEL OUTPUT'}</span><details><summary>Read deliverable</summary><pre>${esc(a.content)}</pre></details><a href="/api/artifacts/${a.id}">Download Markdown ↗</a></article>`, '<div class="empty"><b>Make something worth keeping.</b>Completed tasks save their final output here.</div>')}</section>`;
+  return header + `<div id="showcase-panel">Reading public sharing settings…</div><section class="panel"><h2>Delivered work</h2><p class="subtext">${state.hosted ? 'Saved privately in your encrypted workspace.' : 'Outputs stay local. Demo artifacts are clearly labelled.'}</p>${pageList(p.artifacts.slice().reverse(), 'artifacts-' + p.id, 5, deliveredArtifact, '<div class="empty"><b>Make something worth keeping.</b>Completed tasks save their final output here.</div>')}</section>`;
 }
 function renderTools() {
   if (state.hosted) return renderHostedTools();
@@ -181,7 +196,7 @@ document.addEventListener('submit', async event => {
   } catch (error) { toast(error.message); if (button) button.disabled = false; }
 });
 async function init() {
-  try { if (!await sessionBootstrap()) return; const savedView = new URLSearchParams(location.hash.slice(1)); if (['home','project','jobs','tools','platform'].includes(savedView.get('view'))) view = savedView.get('view'); selected = savedView.get('id'); if (['runtime','research','market','treasury','memory','deliverables','connections','developer'].includes(savedView.get('tab'))) tab = savedView.get('tab'); await refresh(); const results = await Promise.allSettled([api('/api/models'), api('/api/chain')]);
+  try { if (!await sessionBootstrap()) return; await loadDeliveredFormatter(); const savedView = new URLSearchParams(location.hash.slice(1)); if (['home','project','jobs','tools','platform'].includes(savedView.get('view'))) view = savedView.get('view'); selected = savedView.get('id'); if (['runtime','research','market','treasury','memory','deliverables','connections','developer'].includes(savedView.get('tab'))) tab = savedView.get('tab'); await refresh(); const results = await Promise.allSettled([api('/api/models'), api('/api/chain')]);
     if (results[0].status === 'fulfilled') models = results[0].value; else toast(results[0].reason.message);
     if (results[1].status === 'fulfilled') chain = results[1].value;
     $('launch-model').innerHTML = models.length ? models.map(m => `<option value="${esc(m.id)}">${esc(m.id)} · ${money(m.oa_request_limit_micro_usd)} cap${m.oa_accounting_margin_micro_usd ? ` + ${(m.oa_accounting_margin_micro_usd / 1e6).toFixed(3)} USD reserve` : ''}</option>`).join('') : '<option value="pending">Select after runtime setup</option>'; render();

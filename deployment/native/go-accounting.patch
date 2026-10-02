@@ -560,10 +560,10 @@ index 3c2117b..f1f310c 100644
  	}
 diff --git a/zkapi-clientd/internal/zkapi/call_accounting.go b/zkapi-clientd/internal/zkapi/call_accounting.go
 new file mode 100644
-index 0000000..2289259
+index 0000000..1ca08de
 --- /dev/null
 +++ b/zkapi-clientd/internal/zkapi/call_accounting.go
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,265 @@
 +package zkapi
 +
 +import (
@@ -607,6 +607,19 @@ index 0000000..2289259
 +}
 +
 +var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
++var nativeReceiptPattern = regexp.MustCompile(`^0x[0-9a-f]{1,64}$`)
++
++// The signed native receipt uses Felt252.to_hex(), which omits leading zero
++// digits. Canonicalize the same hash bytes at this authenticated boundary so
++// every application sees one 32-byte identifier, including old saved receipts.
++// No native record, signed payload, balance or authorization is changed.
++func canonicalReceiptID(value string) (string, bool) {
++	if !nativeReceiptPattern.MatchString(value) {
++		return "", false
++	}
++	digits := value[2:]
++	return "0x" + strings.Repeat("0", 64-len(digits)) + digits, true
++}
 +
 +func accountingError() error { return &Error{http.StatusBadGateway, "invalid_call_accounting"} }
 +func decimalUnits(v string) (*big.Int, bool) {
@@ -712,7 +725,11 @@ index 0000000..2289259
 +			break
 +		}
 +		r := result.Receipt
-+		if r == nil || !strings.HasPrefix(r.ReceiptID, "0x") || !digestPattern.MatchString(strings.TrimPrefix(r.ReceiptID, "0x")) {
++		if r == nil {
++			return nil, accountingError()
++		}
++		receiptID, validReceipt := canonicalReceiptID(r.ReceiptID)
++		if !validReceipt {
 +			return nil, accountingError()
 +		}
 +		charge, ok := decimalUnits(r.ChargeUnits)
@@ -721,6 +738,7 @@ index 0000000..2289259
 +		if !ok || !balanceOK || charge.Cmp(cap) > 0 {
 +			return nil, accountingError()
 +		}
++		r.ReceiptID = receiptID
 +	default:
 +		return nil, accountingError()
 +	}
@@ -813,16 +831,17 @@ index 0000000..2289259
 +}
 diff --git a/zkapi-clientd/internal/zkapi/call_accounting_test.go b/zkapi-clientd/internal/zkapi/call_accounting_test.go
 new file mode 100644
-index 0000000..4dbafa2
+index 0000000..9d720c7
 --- /dev/null
 +++ b/zkapi-clientd/internal/zkapi/call_accounting_test.go
-@@ -0,0 +1,255 @@
+@@ -0,0 +1,309 @@
 +package zkapi
 +
 +import (
 +	"context"
 +	"encoding/json"
 +	"io"
++	"math/big"
 +	"net/http"
 +	"net/http/httptest"
 +	"strings"
@@ -949,7 +968,7 @@ index 0000000..4dbafa2
 +	}
 +}
 +func TestSettlementSanitizesAndValidatesReceiptWithoutProviderDispatch(t *testing.T) {
-+	for _, kind := range []string{"settled", "bound", "reserved", "bad charge", "bad identity", "bad receipt", "zero"} {
++	for _, kind := range []string{"settled", "bound", "reserved", "bad charge", "bad identity", "bad receipt", "zero", "leading-zero receipt"} {
 +		t.Run(kind, func(t *testing.T) {
 +			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("provider called") }))
 +			defer upstream.Close()
@@ -979,6 +998,9 @@ index 0000000..4dbafa2
 +					report.Receipt.ReceiptID = "fake"
 +				case "zero":
 +					report.Receipt.ChargeUnits = "0"
++				case "leading-zero receipt":
++					report.Receipt.ReceiptID = "0x" + strings.Repeat("a", 63)
++					report.Receipt.ChargeUnits = "3604"
 +				}
 +				raw, _ := json.Marshal(report)
 +				var object map[string]any
@@ -999,8 +1021,58 @@ index 0000000..4dbafa2
 +			if strings.Contains(string(raw), "api_key") || strings.Contains(string(raw), "never-return") {
 +				t.Fatal("secret forwarded")
 +			}
++			if kind == "leading-zero receipt" {
++				var report CallSettlement
++				if json.Unmarshal(raw, &report) != nil || report.Receipt.ReceiptID != "0x0"+strings.Repeat("a", 63) || report.Receipt.ChargeUnits != "3604" || report.Receipt.BalanceUnits != "1000000" {
++					t.Fatal("receipt hash normalization changed monetary accounting")
++				}
++			}
 +		})
 +	}
++}
++
++func TestCanonicalReceiptIDNativeHexWidthsAndMalformedValues(t *testing.T) {
++	for _, digits := range []string{"0", "1", strings.Repeat("a", 63), strings.Repeat("b", 64), "0" + strings.Repeat("a", 63)} {
++		got, ok := canonicalReceiptID("0x" + digits)
++		if !ok || got != "0x"+strings.Repeat("0", 64-len(digits))+digits {
++			t.Fatalf("valid native hash width %d rejected", len(digits))
++		}
++		again, ok := canonicalReceiptID(got)
++		if !ok || again != got {
++			t.Fatal("normalization is not idempotent")
++		}
++	}
++	for _, value := range []string{"", "0x", "1", "0X1", "0xA", "0x-1", " 0x1", "0x1\n", "0x1g", "0x" + strings.Repeat("a", 65)} {
++		if _, ok := canonicalReceiptID(value); ok {
++			t.Fatal("malformed native receipt accepted")
++		}
++	}
++}
++
++func FuzzCanonicalReceiptIDPreservesBytes(f *testing.F) {
++	f.Add([]byte{1})
++	f.Add(make([]byte, 32))
++	f.Add([]byte{0, 15, 16, 255})
++	f.Fuzz(func(t *testing.T, input []byte) {
++		if len(input) > 32 {
++			return
++		}
++		// Encode all possible leading-zero widths using native minimal hex.
++		value := new(big.Int).SetBytes(input)
++		minimal := "0x" + value.Text(16)
++		got, ok := canonicalReceiptID(minimal)
++		if !ok || len(got) != 66 {
++			t.Fatal("native integer hash rejected")
++		}
++		parsed, ok := new(big.Int).SetString(got[2:], 16)
++		if !ok || parsed.Cmp(value) != 0 {
++			t.Fatal("hash bytes changed")
++		}
++		again, ok := canonicalReceiptID(got)
++		if !ok || again != got {
++			t.Fatal("hash identity is not canonical")
++		}
++	})
 +}
 +
 +func TestTrackedWaitsForPriorSignedRecoveryBeforeOneLeaseAuthorization(t *testing.T) {
