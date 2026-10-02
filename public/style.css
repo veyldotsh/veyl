@@ -20,3 +20,5 @@
 @media(max-width:480px){.main-shell>header:has(#mode[hidden]) .breadcrumb{grid-column:1/-1}}
 
 .connection:has(#runtime-status[hidden]){display:none}
+
+.standard-launch .form-row{align-items:end}

@@ -16,6 +16,8 @@ export const VEYL_MAIN_TOKEN_SALT = keccak256(stringToHex(VEYL_MAIN_TOKEN_SALT_L
 const Q96 = 1n << 96n, SUPPLY = parseEther('1000000000');
 const LAUNCH_LIMIT = parseEther('20000000');
 const MAIN_INITIAL_PRICE = 1771577727172025373304338615273325n;
+const STANDARD_FACTORY = 'VeylAgentLaunchFactory', STANDARD_VERSION = 'standard-agent-v1';
+const STANDARD_DUST = 1000000n, STANDARD_FDV = parseEther('2');
 const INFRA_STAGES = [
   { kind: 'quoter', field: 'quoter', artifact: 'VeylQuoter' },
   { kind: 'project-builder', field: 'projectBuilder', artifact: 'VeylProjectBuilder' },
@@ -107,13 +109,20 @@ export class MainnetMarkets {
   }
   quotePolicy(project) {
     const agent = this.config.agentMarkets !== undefined && !this.protectedPreset(project);
-    const policy = agent ? this.config.agentMarkets || {} : {}, shared = agent && policy.sharedInfrastructure === true;
+    const policy = agent ? this.config.agentMarkets || {} : {};
+    const savedFactory = project?.mainnet?.factory;
+    const savedStandard = agent && savedFactory && validPublicAddress(policy.standardFactory) && equal(savedFactory, policy.standardFactory);
+    const standard = agent && (savedFactory ? savedStandard : policy.standardLaunch === true);
+    const shared = agent && (policy.sharedInfrastructure === true || standard);
+    const knownSaved = !agent || !savedFactory || savedStandard || equal(savedFactory, policy.marketFactory) || (!shared && equal(savedFactory, project?.mainnetInfrastructure?.factory));
+    const factory = savedFactory && agent ? savedFactory : standard ? policy.standardFactory : shared ? policy.marketFactory : project?.mainnetInfrastructure?.factory || (agent ? policy.marketFactory : this.config.deployments?.marketFactory);
     return { quoteKind: agent ? 'veyl' : 'native', quoteAsset: agent ? policy.quoteAsset || null : zeroAddress,
       quoteSymbol: agent ? 'VEYL' : 'ETH', quoteDecimals: 18,
       conversionSwapRouter: agent ? policy.conversionSwapRouter || null : zeroAddress,
       mainMarketFactory: agent ? policy.mainMarketFactory || null : null,
       infrastructureMode: shared ? 'shared' : 'per-project',
-      factory: (shared ? policy.marketFactory : project?.mainnetInfrastructure?.factory || (agent ? policy.marketFactory : this.config.deployments?.marketFactory)) || null };
+      factory: factory || null, factoryType: standard ? STANDARD_FACTORY : 'VeylMarketFactory',
+      marketVersion: standard ? STANDARD_VERSION : 'legacy-v1', factoryAllowed: knownSaved && (!project?.mainnet?.marketVersion || project.mainnet.marketVersion === (standard ? STANDARD_VERSION : 'legacy-v1')) };
   }
   configurationReadiness(project, quote = this.quotePolicy(project)) {
     const shared = quote.infrastructureMode === 'shared', configured = validPublicAddress(quote.factory);
@@ -123,16 +132,17 @@ export class MainnetMarkets {
     const sharedMismatch = shared && configured && savedFactory && !equal(savedFactory, quote.factory);
     const missing = [];
     if (mainUnavailable) missing.push('Agent launches require the reviewed main VEYL/ETH market to be deployed and configured.');
-    if (sharedMismatch) missing.push('This workspace references different infrastructure from the configured shared agent factory.');
+    if (!quote.factoryAllowed) missing.push('This market does not match a reviewed factory version.');
+    else if (sharedMismatch) missing.push('This workspace references different infrastructure from the configured shared agent factory.');
     else if (invalidFactory) missing.push('The configured market factory address is invalid.');
     else if (!configured) missing.push(shared ? 'Agent launches are unavailable until the shared market infrastructure is configured.' : 'Deploy and verify the market infrastructure before launching.');
     return {
       configured, missing,
-      canPrepareInfrastructure: !shared && !configured && !mainUnavailable && !invalidFactory,
-      canPrepareLaunch: configured && !mainUnavailable && !sharedMismatch,
+      canPrepareInfrastructure: !shared && !configured && !mainUnavailable && !invalidFactory && quote.factoryAllowed,
+      canPrepareLaunch: configured && !mainUnavailable && !sharedMismatch && quote.factoryAllowed,
       // This is configuration readiness. Runtime and relationship checks remain
       // mandatory in infrastructure() before any launch intent can be prepared.
-      readiness: { status: mainUnavailable ? 'main-market-unavailable' : !configured || sharedMismatch ? 'infrastructure-unavailable' : 'ready', message: missing[0] || null }
+      readiness: { status: mainUnavailable ? 'main-market-unavailable' : !configured || sharedMismatch || !quote.factoryAllowed ? 'infrastructure-unavailable' : 'ready', message: missing[0] || null }
     };
   }
   capabilities(project) {
@@ -140,8 +150,9 @@ export class MainnetMarkets {
     return { ...quote, ...this.configurationReadiness(project, quote), infrastructureStep: (INFRA_STAGES.findIndex(stage => !project?.mainnetInfrastructure?.[stage.field]) + 1) || 5, infrastructureSteps: 5, chainId: 1, quoter: project?.mainnetInfrastructure?.quoter || null, poolManager: ETHEREUM_POOL_MANAGER,
       protocol: this.config.addresses?.protocolRecipient || null, walletTransactions: 'unsigned', broadcasting: false,
       confirmations: this.confirmations,
-      feeBps: { buy: this.config.trading?.buyFeeBps ?? 180, sell: this.config.trading?.sellFeeBps ?? 180 }, lpFeePips: 0,
-      tickSpacing: quote.quoteKind === 'veyl' ? this.config.agentMarkets?.tickSpacing ?? 200 : this.config.trading?.tickSpacing ?? 200, tokenSupply: '1000000000', liquidityCustody: this.mainPosition(project) ? 'deployer-position-nft' : 'permanently-locked',
+      feeBps: { buy: quote.factoryType === STANDARD_FACTORY ? 180 : this.config.trading?.buyFeeBps ?? 180, sell: quote.factoryType === STANDARD_FACTORY ? 180 : this.config.trading?.sellFeeBps ?? 180 }, lpFeePips: 0,
+      tickSpacing: quote.factoryType === STANDARD_FACTORY ? 1 : quote.quoteKind === 'veyl' ? this.config.agentMarkets?.tickSpacing ?? 200 : this.config.trading?.tickSpacing ?? 200, tokenSupply: '1000000000', liquidityCustody: this.mainPosition(project) ? 'deployer-position-nft' : 'permanently-locked',
+      standardLaunch: { enabled: quote.factoryType === STANDARD_FACTORY, supply: '1000000000', targetFdvEth: '2', allocationBps: 10000, creatorAllocation: '0', quoteSeed: '0', optionalCreatorBuy: true, quoteSymbol: 'VEYL', referenceKind: 'canonical-pool-spot', referenceDriftBps: 50, maxLockedDustWei: STANDARD_DUST.toString() },
       ...(this.mainPosition(project) ? { mainTokenLaunch: this.config.mainTokenLaunch } : {}),
       launchProtection: this.protectedPreset(project), launchLimits: { maxTransactionTokens: '20000000', maxWalletTokens: '20000000', blocks: 10 },
       launchType: 'direct-uniswap-v4', automatedSigning: false };
@@ -240,9 +251,9 @@ export class MainnetMarkets {
     if (!policy.canPrepareLaunch) throw new Problem(policy.readiness.message, 409);
     await this.checkChain(); const quote = await this.validateQuoteAsset(project);
     const factory = nonzero(quote.factory, 'deployed factory');
-    await this.identity(factory, 'VeylMarketFactory');
+    await this.identity(factory, quote.factoryType);
     const names = ['poolManager', 'protocol', 'projectDeployer', 'marketDeployer', 'liquidityDeployer', 'quoter', 'quoteAsset', 'conversionSwapRouter', 'projectBuilder', 'marketBuilder', 'liquidityBuilder'];
-    const values = await Promise.all(names.map(f => this.read(factory, 'VeylMarketFactory', f)));
+    const values = await Promise.all(names.map(f => this.read(factory, quote.factoryType, f)));
     const fields = Object.fromEntries(names.map((name, i) => [name, values[i]]));
     if (!equal(fields.poolManager, ETHEREUM_POOL_MANAGER) || !equal(fields.protocol, this.config.addresses?.protocolRecipient) || !equal(fields.quoteAsset, quote.quoteAsset) || !equal(fields.conversionSwapRouter, quote.conversionSwapRouter)) throw new Problem('Factory assets, manager or platform recipient differ from the reviewed policy.', 409);
     const artifacts = { projectDeployer: 'VeylProjectDeployer', marketDeployer: 'VeylMarketDeployer', liquidityDeployer: this.liquidityTypes(project).deployer, ...Object.fromEntries(this.stages(project).map(stage => [stage.field, stage.artifact])) };
@@ -259,6 +270,10 @@ export class MainnetMarkets {
       this.read(fields.marketDeployer, 'VeylMarketDeployer', 'quoteAsset')
     ]);
     if (!equal(bound[0], quote.quoteAsset) || !equal(bound[1], quote.conversionSwapRouter) || !equal(bound[2], quote.quoteAsset)) throw new Problem('Creation modules use different fixed quote assets.', 409);
+    if (quote.factoryType === STANDARD_FACTORY) {
+      const [version, supply, target, dust, drift, reference] = await Promise.all(['LAUNCH_POLICY_VERSION', 'TOKEN_SUPPLY', 'TARGET_FDV_ETH', 'MAX_SEED_DUST', 'MAX_REFERENCE_DRIFT_BPS', 'referenceHook'].map(field => this.read(factory, STANDARD_FACTORY, field)));
+      if (version !== 2n || supply !== SUPPLY || target !== STANDARD_FDV || dust !== STANDARD_DUST || Number(drift) !== 50 || !equal(reference, quote.conversionHook)) throw new Problem('Standard factory policy or canonical price reference differs from the reviewed launch configuration.', 409);
+    }
     return { ...quote, ...fields, factory, manager: fields.poolManager };
   }
   async makeIntent(project, kind, account, request, metadata, checkpoint, { simulate = true } = {}) {
@@ -344,6 +359,7 @@ export class MainnetMarkets {
   async prepareLaunch(project, input, checkpoint) {
     if (project.mainnet) throw new Problem('This workspace already has an Ethereum market.', 409);
     const infra = await this.infrastructure(project), block = await this.client.getBlock();
+    if (infra.factoryType === STANDARD_FACTORY) return this.prepareStandardLaunch(project, input, checkpoint, infra, block);
     const { account, slippage, config } = this.launchConfig(project, input, block.timestamp);
     const [predictedId, preview, initHash] = await this.read(infra.factory, 'VeylMarketFactory', 'predictLaunch', [account, config, toHex(0n, { size: 32 })]);
     if (!equal(preview.quoteAsset, infra.quoteAsset)) throw new Problem('Factory prediction uses a different quote asset.', 409);
@@ -395,6 +411,122 @@ export class MainnetMarkets {
         ...(mainPosition ? { custody: 'deployer-position-nft', nftRecipient: account, positionManager: ETHEREUM_POSITION_MANAGER, targetFdvEth: '2', startingFdvEth: '2.000040289648088261', roundingDustTokens: formatEther(tokenUsed - targetTokens) } : {}) }
     }, checkpoint);
   }
+  standardRequest(project, input, timestamp) {
+    const allowed = new Set(['account', 'devBuyQuote', 'slippageBps', 'treasuryOwner', 'operator', 'treasuryEth', 'dailyLimitEth', 'reprice']);
+    if (!input || typeof input !== 'object' || Object.keys(input).some(key => !allowed.has(key))) throw new Problem('Standard agent launches derive all price, supply, fee and liquidity terms. Only the creator buy and treasury settings are editable.');
+    if (input.reprice !== undefined && typeof input.reprice !== 'boolean') throw new Problem('Explicit repricing must be a boolean.');
+    const account = nonzero(input.account, 'connected wallet');
+    return { account, slippage: slippageOf(input.slippageBps), buyQuote: decimal(input.devBuyQuote ?? '0', 'optional creator buy in VEYL', true), config: {
+      salt: keccak256(stringToHex(`veyl:ethereum:agent-standard:v1:${project.id}`)), name: project.name, symbol: project.symbol,
+      treasuryOwner: nonzero(input.treasuryOwner ?? account, 'treasury owner'), operator: nonzero(input.operator ?? account, 'operator'),
+      dailyLimit: decimal(input.dailyLimitEth ?? '0', 'daily treasury limit', true), treasuryEth: decimal(input.treasuryEth ?? '0', 'initial treasury ETH', true),
+      buyFeeBps: 180, sellFeeBps: 180, lpFeePips: 0, tickSpacing: 1, sqrtPriceX96: 0n, tickLower: 0, tickUpper: 0,
+      liquidity: 0n, maxToken: SUPPLY, maxQuote: 0n, minToken: SUPPLY - STANDARD_DUST, minQuote: 0n, deadline: timestamp + 900n, launchProtection: false
+    } };
+  }
+  async standardRead(address, functionName, args = []) {
+    try { return await this.read(address, STANDARD_FACTORY, functionName, args); }
+    catch (error) {
+      const reverted = error instanceof BaseError ? error.walk(cause => cause instanceof ContractFunctionRevertedError) : null;
+      if (reverted instanceof ContractFunctionRevertedError && reverted.data?.errorName === 'ReferencePriceMoved') throw new Problem('The saved launch price moved outside its 0.5% limit. After the old launch deadline, explicitly refresh the plan before signing.', 409);
+      throw error;
+    }
+  }
+  validateStandardConfig(config, request, summary) {
+    for (const field of ['salt', 'name', 'symbol', 'treasuryOwner', 'operator', 'dailyLimit', 'treasuryEth', 'deadline']) {
+      const matches = ['salt', 'treasuryOwner', 'operator'].includes(field) ? equal(config[field], request[field]) : config[field] === request[field];
+      if (!matches) throw new Problem('Standard factory changed the saved creator or treasury request.', 409);
+    }
+    if (config.buyFeeBps !== 180 || config.sellFeeBps !== 180 || config.lpFeePips !== 0 || config.tickSpacing !== 1 || config.launchProtection !== false ||
+        config.maxToken !== SUPPLY || config.minToken !== SUPPLY - STANDARD_DUST || config.maxQuote !== 0n || config.minQuote !== 0n ||
+        config.liquidity <= 0n || config.liquidity >= 1n << 127n || config.sqrtPriceX96 < LIMIT.buy || config.sqrtPriceX96 > LIMIT.sell ||
+        !Number.isSafeInteger(config.tickLower) || !Number.isSafeInteger(config.tickUpper) || config.tickLower < -887272 || config.tickUpper > 887272 || config.tickLower >= config.tickUpper ||
+        summary.tokenUsed < SUPPLY - STANDARD_DUST || summary.tokenUsed > SUPPLY || summary.lockedDust < 0n || summary.tokenUsed + summary.lockedDust !== SUPPLY ||
+        summary.actualStartingFdvEth * 10000n < STANDARD_FDV * 9950n || summary.actualStartingFdvEth * 10000n > STANDARD_FDV * 10050n ||
+        summary.referenceSqrtPriceX96 < LIMIT.buy || summary.referenceSqrtPriceX96 > LIMIT.sell) throw new Problem('Standard launch does not match the fixed supply, locked allocation, fees or 2 ETH valuation bound.', 409);
+  }
+  async prepareStandardLaunch(project, input, checkpoint, infra, block) {
+    if (!checkpoint) throw new Problem('Durable project storage is required.', 500);
+    const { account, slippage, buyQuote, config: request } = this.standardRequest(project, input, block.timestamp);
+    if (input.reprice === true && project.mainnetPlan) await this.repriceStandardPlan(project, account, infra, block, checkpoint);
+    const requestFingerprint = keccak256(stringToHex(JSON.stringify(serialize({ account, factory: infra.factory, request: { ...request, deadline: 0n }, buyQuote, slippage }))));
+    const prior = project.mainnetPlan;
+    if (prior && (prior.marketVersion !== STANDARD_VERSION || prior.requestFingerprint !== requestFingerprint || !equal(prior.factory, infra.factory))) throw new Problem('This workspace has a persisted launch plan with different terms or a legacy factory. Recover any submitted transaction, then explicitly refresh the standard plan after its launch deadline; it cannot be silently replaced.', 409);
+    let config, summary;
+    if (prior) {
+      config = { ...decodeConfig(prior.config), deadline: request.deadline };
+      summary = Object.fromEntries(['actualStartingFdvEth', 'tokenUsed', 'lockedDust', 'referenceSqrtPriceX96'].map(key => [key, BigInt(prior[key])]));
+    } else {
+      const [derived, actualStartingFdvEth, tokenUsed, lockedDust, referenceSqrtPriceX96] = await this.standardRead(infra.factory, 'standardLaunchConfig', [account, request]);
+      config = derived; summary = { actualStartingFdvEth, tokenUsed, lockedDust, referenceSqrtPriceX96 };
+    }
+    this.validateStandardConfig(config, request, summary);
+    const fingerprint = keccak256(stringToHex(JSON.stringify(serialize({ account, factory: infra.factory, ...config, deadline: 0n, buyQuote, slippage }))));
+    if (prior && prior.fingerprint !== fingerprint) throw new Problem('The persisted standard launch terms are inconsistent.', 409);
+    const [id, preview, initHash] = await this.standardRead(infra.factory, 'predictLaunch', [account, config, toHex(0n, { size: 32 })]);
+    if (!equal(preview.quoteAsset, infra.quoteAsset) || !equal(preview.creator, account) || !equal(preview.treasuryOwner, config.treasuryOwner)) throw new Problem('Standard launch prediction differs from its creator or quote asset.', 409);
+    const tokenIsCurrency0 = BigInt(preview.token) < BigInt(infra.quoteAsset);
+    const [amount0, amount1] = await this.read(infra.quoter, 'VeylQuoter', 'previewSeed', [config.sqrtPriceX96, config.tickLower, config.tickUpper, config.liquidity]);
+    if ((tokenIsCurrency0 ? amount0 : amount1) !== summary.tokenUsed || (tokenIsCurrency0 ? amount1 : amount0) !== 0n) throw new Problem('The standard seed preview differs from its full-supply one-sided allocation.', 409);
+    const priceLimit = swapLimit({ tokenIsCurrency0 }, 'buy');
+    // Also validates the current canonical VEYL/ETH spot against a saved config.
+    // A zero buy performs this read without approvals or a provider transaction.
+    const [expectedTokens, hookFee, sqrtPriceX96After] = await this.standardRead(infra.factory, 'previewInitialBuy', [account, config, buyQuote, priceLimit]);
+    const minimumTokens = expectedTokens * BigInt(10000 - slippage) / 10000n;
+    if (buyQuote === 0n ? expectedTokens !== 0n || hookFee !== 0n || sqrtPriceX96After !== config.sqrtPriceX96 : expectedTokens <= 0n || expectedTokens > summary.tokenUsed || minimumTokens <= 0n || hookFee !== buyQuote * 180n / 10000n || sqrtPriceX96After < LIMIT.buy || sqrtPriceX96After > LIMIT.sell) throw new Problem('The initial creator buy has no valid exact-output preview.', 409);
+    const creatorBuy = serialize({ quoteAmount: formatEther(buyQuote), quoteSymbol: 'VEYL', expectedTokens: formatEther(expectedTokens), minimumTokens: formatEther(minimumTokens), slippageBps: slippage, hookFeeQuote: formatEther(hookFee), priceLimit, sqrtPriceX96After });
+    if (!prior) { project.mainnetPlan = serialize({ ...infra, marketVersion: STANDARD_VERSION, requestFingerprint, fingerprint, account, config, ...summary, quoteUsed: 0n, tokenIsCurrency0, creatorTokens: 0n, buyQuote, minimumBuyTokens: minimumTokens, creatorBuy }); checkpoint(); }
+    const plan = project.mainnetPlan;
+    if (plan.id && !equal(plan.id, id)) throw new Problem('The persisted standard launch identity changed.', 409);
+    if (!plan.hookSalt || !plan.predicted) {
+      for (let i = 0; i < 1_000_000; i++) {
+        const hookSalt = toHex(BigInt(i), { size: 32 });
+        const salt = keccak256(encodeAbiParameters([{ type: 'bytes32' }, { type: 'bytes32' }], [id, hookSalt]));
+        if ((BigInt(getCreate2Address({ from: infra.marketDeployer, salt, bytecodeHash: initHash })) & 0x3fffn) === 0x20ccn) { plan.id = id; plan.hookSalt = hookSalt; break; }
+        if (i % 1000 === 0) await new Promise(resolve => setImmediate(resolve));
+      }
+      if (!plan.hookSalt) throw new Problem('Hook address search exhausted. No transaction was sent.', 409);
+      const [finalId, predicted] = await this.standardRead(infra.factory, 'predictLaunch', [account, config, plan.hookSalt]);
+      if (!equal(finalId, id) || !equal(predicted.token, preview.token) || !equal(predicted.creator, account) || !equal(predicted.treasuryOwner, config.treasuryOwner) || !equal(predicted.quoteAsset, infra.quoteAsset)) throw new Problem('The final standard launch prediction is inconsistent.', 409);
+      plan.predicted = serialize(predicted); checkpoint();
+    }
+    const market = await this.standardRead(infra.factory, 'getMarket', [plan.id]);
+    if (!equal(market.token, zeroAddress)) throw new Problem('This deterministic market already exists. Recover its launch transaction before preparing another.', 409);
+    const pending = project.mainnetIntents?.find(intent => intent.kind === 'launch' && !['confirmed', 'failed', 'expired'].includes(intent.status) && (intent.expiresAt > this.now() || intent.transactionHash));
+    if (pending) return pending;
+    if (buyQuote > 0n) {
+      const approval = await this.prepareAllowance(project, account, infra.quoteAsset, infra.factory, buyQuote, { allowanceFor: fingerprint, purpose: 'launch-creator-buy', marketVersion: STANDARD_VERSION, approvalAssetSymbol: 'VEYL', creatorBuy }, checkpoint);
+      if (approval) return approval;
+    }
+    plan.config.deadline = config.deadline.toString(); plan.minimumBuyTokens = minimumTokens.toString(); plan.creatorBuy = creatorBuy; checkpoint();
+    const data = encodeFunctionData({ abi: this.artifact(STANDARD_FACTORY).abi, functionName: buyQuote > 0n ? 'launchAndBuy' : 'launch', args: buyQuote > 0n ? [config, plan.hookSalt, buyQuote, minimumTokens, priceLimit] : [config, plan.hookSalt] });
+    return this.makeIntent(project, 'launch', account, { to: infra.factory, data, value: config.treasuryEth }, {
+      marketId: plan.id, marketVersion: STANDARD_VERSION, predicted: plan.predicted, expiresAt: this.now() + 840000,
+      launchProtection: false, quoteAsset: infra.quoteAsset, quoteSymbol: 'VEYL', tokenIsCurrency0, creatorBuy,
+      allocation: { treasuryEth: formatEther(config.treasuryEth), liquidityQuote: '0', quoteSymbol: 'VEYL', liquidityTokens: formatEther(summary.tokenUsed), lockedDustTokens: formatEther(summary.lockedDust), creatorTokens: '0', totalTokens: '1000000000', permanentlyLocked: true, targetFdvEth: '2', startingFdvEth: formatEther(summary.actualStartingFdvEth), referenceKind: 'canonical-pool-spot', referenceDriftBps: 50 }
+    }, checkpoint);
+  }
+  async repriceStandardPlan(project, account, infra, block, checkpoint) {
+    const plan = project.mainnetPlan;
+    if (plan.marketVersion !== STANDARD_VERSION || !equal(plan.account, account) || !equal(plan.factory, infra.factory)) throw new Problem('Only the same creator and standard factory can refresh this plan. Recover a legacy or different-wallet launch separately.', 409);
+    const active = (project.mainnetIntents || []).filter(intent => !['confirmed', 'failed'].includes(intent.status));
+    if (active.some(intent => intent.transactionHash || ['signed', 'submitted', 'unknown'].includes(intent.status))) throw new Problem('Reconcile every submitted or uncertain transaction before refreshing the launch plan.', 409);
+    const launches = (project.mainnetIntents || []).filter(intent => intent.kind === 'launch' && intent.marketId === plan.id);
+    for (const intent of launches) {
+      const decoded = decodeFunctionData({ abi: this.artifact(STANDARD_FACTORY).abi, data: intent.transaction.data });
+      if (!['launch', 'launchAndBuy'].includes(decoded.functionName) || block.timestamp <= decoded.args[0].deadline) throw new Problem('The previous launch can still execute. Wait until its onchain deadline before refreshing the plan.', 409);
+    }
+    if (plan.id && !equal((await this.standardRead(infra.factory, 'getMarket', [plan.id])).token, zeroAddress)) throw new Problem('This market already exists. Recover its launch transaction instead of refreshing.', 409);
+    for (const intent of launches) {
+      // Retain the exact old terms for canonical receipt recovery, even if an
+      // earlier transaction only becomes known after this explicit refresh.
+      intent.launchPlan ||= structuredClone(plan);
+      if (intent.status === 'prepared') intent.status = 'expired';
+    }
+    // ERC20 approvals have no onchain expiry. Keep their finite authorization
+    // and recovery records; a new launch still requires a new wallet signature.
+    delete project.mainnetPlan; checkpoint();
+  }
   async prepareAllowance(project, account, asset, spender, amount, metadata, checkpoint) {
     const allowance = await this.client.readContract({ address: asset, abi: erc20Abi, functionName: 'allowance', args: [account, spender] });
     if (allowance >= amount) return null;
@@ -405,7 +537,7 @@ export class MainnetMarkets {
   async validateMarket(project) {
     const infra = await this.infrastructure(project), saved = project.mainnet;
     if (!saved?.id || !equal(saved.factory, infra.factory)) throw new Problem('No verified Ethereum market belongs to this workspace.', 409);
-    const actual = await this.read(infra.factory, 'VeylMarketFactory', 'getMarket', [saved.id]);
+    const actual = await this.read(infra.factory, infra.factoryType || 'VeylMarketFactory', 'getMarket', [saved.id]);
     for (const field of ['creator', 'treasuryOwner', 'token', 'treasury', 'revenueRouter', 'hook', 'swapRouter', 'liquidityVault', 'poolId', 'quoteAsset']) if (!equal(saved[field], actual[field])) throw new Problem('Recorded market differs from its factory record.', 409);
     if (!equal(actual.quoteAsset, infra.quoteAsset)) throw new Problem('Recorded market quote asset differs from the reviewed policy.', 409);
     const revenueRouterType = nativeQuote(infra) ? 'RevenueRouter' : 'QuoteRevenueRouter';
@@ -432,8 +564,18 @@ export class MainnetMarkets {
       ...['launchProtectionEnabled', 'launchFactory', 'poolManager', 'activated', 'launchBlock', 'bootstrapVault'].map(f => this.read(actual.token, 'AgentToken', f)),
       this.read(actual.liquidityVault, liquidityType, 'tokenRefundRecipient')
     ]);
-    if (protection !== expectedProtection || !equal(launchFactory, infra.factory) || !equal(tokenManager, infra.manager) || !equal(refundRecipient, protection ? infra.factory : actual.creator) ||
+    const standard = infra.factoryType === STANDARD_FACTORY;
+    if (protection !== expectedProtection || !equal(launchFactory, infra.factory) || !equal(tokenManager, infra.manager) || !equal(refundRecipient, protection || standard ? infra.factory : actual.creator) ||
       (protection ? activated !== true || launchBlock <= 0n || !equal(bootstrapVault, actual.liquidityVault) : activated !== false || launchBlock !== 0n || !equal(bootstrapVault, zeroAddress))) throw new Problem('Token launch protection or bootstrap relationships do not match the saved launch.', 409);
+    if (standard) {
+      const plan = project.mainnetPlan;
+      if (plan?.marketVersion !== STANDARD_VERSION || plan.config?.launchProtection !== false || BigInt(plan.tokenUsed) + BigInt(plan.lockedDust) !== SUPPLY || BigInt(plan.lockedDust) > STANDARD_DUST || BigInt(plan.lockedDust) < 0n || BigInt(plan.creatorTokens) !== 0n) throw new Problem('The recorded standard liquidity allocation is inconsistent.', 409);
+      const [seeded, liquidity, refund, lower, upper, buyFee, sellFee, lpFee, spacing] = await Promise.all([
+        ...['seeded', 'lockedLiquidity', 'refundRecipient', 'tickLower', 'tickUpper'].map(field => this.read(actual.liquidityVault, liquidityType, field)),
+        ...['buyFeeBps', 'sellFeeBps', 'lpFee', 'tickSpacing'].map(field => this.read(actual.hook, 'VeylFeeHook', field))
+      ]);
+      if (seeded !== true || liquidity !== BigInt(plan.config.liquidity) || !equal(refund, infra.factory) || lower !== plan.config.tickLower || upper !== plan.config.tickUpper || buyFee !== 180 || sellFee !== 180 || lpFee !== 0 || spacing !== 1) throw new Problem('The standard market liquidity or immutable fee policy differs from its reviewed launch.', 409);
+    }
     const position = this.mainPosition(project) ? await this.positionStatus(actual.liquidityVault) : null;
     return { ...saved, ...infra, revenueRouterType, liquidityType, liquidityCustody: position ? 'deployer-position-nft' : 'permanently-locked', position, tokenIsCurrency0, launchProtection: protection, launchBlock };
   }
@@ -610,20 +752,22 @@ export class MainnetMarkets {
       if (!equal(infra.quoter, intent.quoter) || !equal(infra.quoter, project.mainnetInfrastructure?.quoter)) throw new Problem('Factory quoter differs from the verified deployment plan.', 409);
       project.mainnetInfrastructure = { ...infra, hash: input.transactionHash, blockNumber: receipt.blockNumber.toString() };
     } else if (intent.kind === 'launch') {
-      const plan = project.mainnetPlan;
+      const plan = intent.launchPlan || project.mainnetPlan;
       if (!plan || plan.id !== intent.marketId) throw new Problem('Launch plan is absent or mismatched.', 409);
-      const event = parseEventLogs({ abi: this.artifact('VeylMarketFactory').abi, logs: receipt.logs.filter(l => equal(l.address, expected.to)), eventName: 'MarketLaunched' }).find(e => equal(e.args.id, plan.id));
+      const factoryType = plan.marketVersion === STANDARD_VERSION ? STANDARD_FACTORY : 'VeylMarketFactory';
+      const event = parseEventLogs({ abi: this.artifact(factoryType).abi, logs: receipt.logs.filter(l => equal(l.address, expected.to)), eventName: 'MarketLaunched' }).find(e => equal(e.args.id, plan.id));
       if (!event || !equal(event.args.creator, intent.account)) throw new Problem('Launch receipt does not match this creator and market.', 409);
-      const actual = await this.read(plan.factory, 'VeylMarketFactory', 'getMarket', [plan.id]);
+      const actual = await this.read(plan.factory, factoryType, 'getMarket', [plan.id]);
       for (const field of ['creator', 'treasuryOwner', 'token', 'treasury', 'revenueRouter', 'hook', 'swapRouter', 'liquidityVault', 'poolId', 'quoteAsset']) if (!equal(actual[field], plan.predicted[field])) throw new Problem('Created market differs from the deterministic launch plan.', 409);
-      const candidate = { ...project, mainnet: serialize({ ...actual, id: plan.id, factory: plan.factory, hash: input.transactionHash, chainId: 1, type: 'ethereum-mainnet' }) };
+      const standard = factoryType === STANDARD_FACTORY ? this.verifyStandardAllocation(plan, intent, receipt) : {};
+      const candidate = { ...project, mainnetPlan: plan, mainnet: serialize({ ...actual, id: plan.id, factory: plan.factory, hash: input.transactionHash, chainId: 1, type: 'ethereum-mainnet', ...standard }) };
       const verified = await this.validateMarket(candidate);
       if (verified.position) {
         const mint = parseEventLogs({ abi: erc721Abi, logs: receipt.logs.filter(log => equal(log.address, ETHEREUM_POSITION_MANAGER)), eventName: 'Transfer' }).find(log => log.args.tokenId === verified.position.positionId && equal(log.args.from, zeroAddress) && equal(log.args.to, intent.account));
         if (!mint) throw new Problem('Launch receipt does not include the exact position NFT minted to the configured deployer.', 409);
         candidate.mainnet.positionId = verified.position.positionId.toString(); candidate.mainnet.positionManager = ETHEREUM_POSITION_MANAGER;
       }
-      project.mainnet = candidate.mainnet;
+      project.mainnet = candidate.mainnet; project.mainnetPlan = candidate.mainnetPlan;
     } else if (intent.kind === 'convert-fees') {
       const market = await this.validateMarket(project);
       const event = parseEventLogs({ abi: this.artifact('QuoteRevenueRouter').abi, logs: receipt.logs.filter(l => equal(l.address, market.revenueRouter)), eventName: 'FeesConverted' })[0];
@@ -638,5 +782,25 @@ export class MainnetMarkets {
       quote.status = 'completed';
     }
     intent.status = 'confirmed'; intent.blockNumber = receipt.blockNumber.toString(); intent.blockHash = receipt.blockHash; checkpoint(); return serialize(intent);
+  }
+  verifyStandardAllocation(plan, intent, receipt) {
+    if (intent.marketVersion !== STANDARD_VERSION || !equal(intent.account, plan.account) || !equal(intent.transaction.to, plan.factory)) throw new Problem('Standard launch intent differs from the persisted creator or factory.', 409);
+    const abi = this.artifact(STANDARD_FACTORY).abi, logs = receipt.logs.filter(log => equal(log.address, plan.factory));
+    const only = name => {
+      const events = parseEventLogs({ abi, logs, eventName: name }).filter(event => equal(event.args.id, plan.id));
+      if (events.length !== 1) throw new Problem(`Standard launch receipt requires one ${name} event.`, 409);
+      return events[0].args;
+    };
+    const allocation = only('LaunchAllocation'), locked = only('StandardLiquidityLocked');
+    if (allocation.treasuryEth !== BigInt(plan.config.treasuryEth) || allocation.liquidityQuote !== 0n || allocation.creatorTokens !== 0n || allocation.liquidityTokens !== BigInt(plan.tokenUsed) ||
+        locked.seededTokens !== allocation.liquidityTokens || locked.lockedDust !== BigInt(plan.lockedDust) || locked.seededTokens + locked.lockedDust !== SUPPLY || locked.lockedDust > STANDARD_DUST ||
+        locked.startingFdvEth * 10000n < STANDARD_FDV * 9950n || locked.startingFdvEth * 10000n > STANDARD_FDV * 10050n || locked.referenceSqrtPriceX96 < LIMIT.buy || locked.referenceSqrtPriceX96 > LIMIT.sell) throw new Problem('Standard launch receipt differs from the full locked allocation or bounded starting valuation.', 409);
+    const decoded = decodeFunctionData({ abi, data: intent.transaction.data }), amount = BigInt(plan.buyQuote);
+    const config = { ...decodeConfig(plan.config), deadline: decoded.args?.[0]?.deadline };
+    const encoded = encodeFunctionData({ abi, functionName: amount > 0n ? 'launchAndBuy' : 'launch', args: amount > 0n ? [config, plan.hookSalt, amount, BigInt(plan.minimumBuyTokens), BigInt(plan.creatorBuy.priceLimit)] : [config, plan.hookSalt] });
+    if (!equal(encoded, intent.transaction.data) || decoded.functionName !== (amount > 0n ? 'launchAndBuy' : 'launch')) throw new Problem('Confirmed launch calldata differs from the persisted standard terms.', 409);
+    const buys = parseEventLogs({ abi, logs, eventName: 'CreatorBought' }).filter(event => equal(event.args.id, plan.id));
+    if (amount === 0n ? buys.length !== 0 : buys.length !== 1 || !equal(buys[0].args.creator, intent.account) || buys[0].args.quotePaid !== amount || buys[0].args.tokensBought !== parseEther(plan.creatorBuy.expectedTokens) || buys[0].args.tokensBought < BigInt(plan.minimumBuyTokens)) throw new Problem('Creator buy receipt differs from the exact paid amount, recipient or token minimum.', 409);
+    return { marketVersion: STANDARD_VERSION, seededTokens: locked.seededTokens, lockedDust: locked.lockedDust, startingFdvEth: locked.startingFdvEth, referenceSqrtPriceX96: locked.referenceSqrtPriceX96, creatorBuyTokens: amount > 0n ? buys[0].args.tokensBought : 0n };
   }
 }

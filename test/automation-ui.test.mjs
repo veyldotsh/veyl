@@ -24,10 +24,10 @@ class Element extends Region {
 const project = { id: randomUUID(), name: 'Evidence agent', model: 'model-one', status: 'active', artifacts: [{ id: 'result-one', title: 'Private title', content: 'Exact <script>selected result</script>', mode: 'zkapi' }] };
 const autonomous = () => ({ sourceHosts: ['ethereum.org'], runsToday: 0, cycles: [], policy: { enabled: false, objective: '', cadenceMinutes: 360, dailyRunCap: 1, allowedTools: ['read_source'], sourceUrls: [], sourceHosts: [], reviewerModel: null, nextAt: null } });
 const timers = () => { let fn; return { setTimer: callback => { fn = callback; return 1; }, clearTimer() {}, poll: () => fn?.() }; };
-async function submit(element, values, name) {
+async function submit(element, values, name, action) {
   const original = globalThis.FormData;
   globalThis.FormData = class { get(key) { return values[key] ?? null; } getAll(key) { return values[key] || []; } };
-  try { await element.handlers.get('submit')({ target: { matches: selector => selector === `[data-${name}-form]` }, preventDefault() {} }); }
+  try { await element.handlers.get('submit')({ target: { matches: selector => selector === `[data-${name}-form]` }, submitter: action ? { value: action } : undefined, preventDefault() {} }); }
   finally { globalThis.FormData = original; }
 }
 
@@ -85,13 +85,26 @@ test('notifications stay private and only acknowledge on an explicit click', asy
   await element.click('notification','read',{ notificationId:'note-one' }); assert.deepEqual(writes, [{ path:'/api/notifications/ack', body:{id:'note-one'} }]); panel.destroy();
 });
 
-test('public sharing requires exact selected saved results and explicit approval', async () => {
+test('public sharing requires an exact preview and approval, with history off by default', async () => {
   const element = new Element(), writes = [];
-  const panel = mountShowcasePanel(element, { project, api: async (path, body) => { if (body) writes.push({path,body}); return { showcase:null }; } }); await panel.ready;
+  const panel = mountShowcasePanel(element, { project, api: async (path, body) => { if (body) writes.push({path,body}); return path.endsWith('/preview') ? { preview: { title:body.title,description:body.description,artifacts:project.artifacts.map(a=>({...a,title:'Result 1'})) }, previewDigest:'a'.repeat(64),includeRunHistory:body.includeRunHistory } : { showcase:null }; } }); await panel.ready;
   assert.match(element.html(), /Exact &lt;script&gt;selected result/);
+  assert.doesNotMatch(element.html(), /name="includeRunHistory" checked/);
   const input = { title:'Shared work', description:'Chosen findings', artifactId:['result-one'] };
-  await submit(element,input,'showcase'); await submit(element,{...input,approve:'on',artifactId:['another-agent']},'showcase'); assert.equal(writes.length,0);
-  await submit(element,{...input,approve:'on'},'showcase'); assert.deepEqual(writes[0],{path:`/api/projects/${project.id}/showcase`,body:{title:'Shared work',description:'Chosen findings',artifactIds:['result-one']}}); panel.destroy();
+  await submit(element,input,'showcase','publish'); await submit(element,{...input,approve:'on',artifactId:['another-agent']},'showcase'); assert.equal(writes.length,0);
+  await submit(element,input,'showcase','preview'); assert.equal(writes.length,1); assert.match(element.html(),/Exact public preview/);
+  await submit(element,{...input,approve:'on'},'showcase','publish'); assert.deepEqual(writes[1],{path:`/api/projects/${project.id}/showcase`,body:{title:'Shared work',description:'Chosen findings',artifactIds:['result-one'],includeRunHistory:false,previewDigest:'a'.repeat(64)}}); panel.destroy();
+});
+
+test('editing public history choices invalidates the preview and stale/uncertain publication never retries', async () => {
+  const element = new Element(), writes = [], input = { title:'Shared', description:'Reviewed content',artifactId:['result-one'],includeRunHistory:'on',approve:'on' };
+  const panel = mountShowcasePanel(element,{project,api:async(path,body)=>{ if(body)writes.push({path,body}); if(path.endsWith('/preview'))return{preview:{title:body.title,description:body.description,artifacts:project.artifacts.map(a=>({...a,title:'Result 1'}))},previewDigest:'b'.repeat(64),includeRunHistory:true}; if(body)throw Error('Public content changed. Preview again.');return{showcase:null}; }});await panel.ready;
+  await submit(element,input,'showcase','preview'); assert.match(element.html(),/No reliably linked completed run/);
+  element.handlers.get('input')({target:{name:'description',closest:()=>({})}});
+  await submit(element,input,'showcase','publish'); assert.equal(writes.length,1);
+  await submit(element,input,'showcase','preview'); await submit(element,{...input,title:'Changed'},'showcase','publish');assert.equal(writes.length,2);
+  await submit(element,input,'showcase','preview');await submit(element,input,'showcase','publish');assert.equal(writes.length,4);assert.match(element.html(),/No automatic retry/);
+  await submit(element,input,'showcase','publish');assert.equal(writes.length,4);panel.destroy();
 });
 
 test('sharing status refuses arbitrary links and exposes only explicit revoke', async () => {

@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { getAddress } from 'viem';
 import { SealedState } from './encrypted-state.mjs';
 import { Problem } from './agent.mjs';
+import { validateSourceUrl } from './tools.mjs';
+import { jobCharge } from './activity.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -10,6 +12,66 @@ const iso = value => new Date(value).toISOString();
 const projectId = value => typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
 const text = (value, max, label) => { if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) throw new Problem(`Invalid ${label}.`); return value.trim(); };
 const fields = (value, allowed) => { if (!isObject(value) || Object.keys(value).some(key => !allowed.includes(key))) throw new Problem('Unexpected request fields.'); };
+const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const stageRoles = new Set(['Planner', 'Researcher', 'Developer', 'Writer', 'Reviewer']);
+const publicTools = new Set(['read_source', 'chain_read', 'save_note', 'prepare_social_draft']);
+function publicSource(value) {
+  try {
+    const original = new URL(value);
+    if (original.search || original.hash) return null;
+    const url = new URL(validateSourceUrl(value));
+    // A query may contain an access token. Omit the link rather than invent a different source URL.
+    if (url.search || url.hash || /[\u0000-\u0020<>"'\\]/.test(value)) return null;
+    return url.href;
+  } catch { return null; }
+}
+function sharedRun(project, artifact, jobs) {
+  if (!projectId(artifact.jobId) || !Array.isArray(jobs)) return null;
+  const matches = jobs.filter(job => job.id === artifact.jobId && job.projectId === project.id && job.artifactId === artifact.id);
+  if (matches.length !== 1) return null;
+  const job = matches[0];
+  if (job.status !== 'completed' || job.mode !== artifact.mode || !validTime(job.at) || !validTime(job.finishedAt) || !Array.isArray(job.steps) || job.steps.length > 32 || job.steps.some(step => !isObject(step)) || job.steps.at(-1)?.output !== artifact.content) return null;
+  const events = [];
+  for (const step of job.steps) {
+    if (validTime(step.at) && validTime(step.finishedAt) && ['completed', 'not-dispatched'].includes(step.status)) events.push({ type: 'stage', role: stageRoles.has(step.role) ? step.role : 'Model stage', status: step.status, at: iso(step.at), finishedAt: iso(step.finishedAt) });
+    for (const action of Array.isArray(step?.toolActivity) ? step.toolActivity.slice(0, 128) : []) {
+      if (!isObject(action) || !publicTools.has(action.name) || !['completed', 'failed'].includes(action.status) || !validTime(action.at) || !validTime(action.finishedAt)) continue;
+      const source = action.name === 'read_source' ? publicSource((action.evidence || action.result)?.source) : null;
+      events.push({ type: 'tool', tool: action.name, status: action.status, at: iso(action.at), finishedAt: iso(action.finishedAt), ...(source ? { source } : {}) });
+    }
+  }
+  events.sort((a, b) => a.at.localeCompare(b.at));
+  let charge = null;
+  if (job.mode === 'zkapi') {
+    const calls = job.steps.flatMap(step => [step, ...(Array.isArray(step.additionalCalls) ? step.additionalCalls : [])]).map(step => step.callAccounting).filter(Boolean);
+    if (Number.isSafeInteger(job.reservation) && job.reservation >= 0 && calls.length <= 256 && calls.every(call => ['settled', 'pending'].includes(call.status) && (call.status !== 'settled' || typeof call.chargeWei === 'string' && /^(0|[1-9][0-9]{0,77})$/.test(call.chargeWei) && Number.isSafeInteger(call.valuationMicroUsd) && call.valuationMicroUsd >= 0))) {
+      const value = jobCharge(job);
+      if (Number.isSafeInteger(value.settledMicroUsd) && value.settledMicroUsd <= job.reservation && value.settledWei.length <= 78) charge = { settledWei: value.settledWei, settledMicroUsd: value.settledMicroUsd, pendingMicroUsd: value.pendingMicroUsd, settledCalls: value.settledCalls, totalCalls: value.totalCalls };
+    }
+  }
+  return { version: 1, status: 'completed', startedAt: iso(job.at), finishedAt: iso(job.finishedAt), events: events.slice(0, 64), omittedEvents: Math.max(0, events.length - 64), charge };
+}
+function publishedRun(run) {
+  // Public reads enforce the same nested allowlist even for old or malformed sealed rows.
+  if (!isObject(run) || run.version !== 1 || run.status !== 'completed' || !validTime(run.startedAt) || !validTime(run.finishedAt) || !Array.isArray(run.events) || run.events.length > 64 || !Number.isSafeInteger(run.omittedEvents) || run.omittedEvents < 0) return null;
+  const events = [];
+  for (const event of run.events) {
+    if (!isObject(event) || !validTime(event.at) || !validTime(event.finishedAt)) return null;
+    const times = { status: event.status, at: iso(event.at), finishedAt: iso(event.finishedAt) };
+    if (event.type === 'stage' && (stageRoles.has(event.role) || event.role === 'Model stage') && ['completed', 'not-dispatched'].includes(event.status)) events.push({ type: 'stage', role: event.role, ...times });
+    else if (event.type === 'tool' && publicTools.has(event.tool) && ['completed', 'failed'].includes(event.status)) {
+      const source = event.tool === 'read_source' ? publicSource(event.source) : null;
+      events.push({ type: 'tool', tool: event.tool, ...times, ...(source ? { source } : {}) });
+    } else return null;
+  }
+  let charge = null;
+  if (run.charge !== null) {
+    const c = run.charge;
+    if (!isObject(c) || typeof c.settledWei !== 'string' || !/^(0|[1-9][0-9]{0,77})$/.test(c.settledWei) || !['settledMicroUsd', 'pendingMicroUsd', 'settledCalls', 'totalCalls'].every(key => Number.isSafeInteger(c[key]) && c[key] >= 0) || c.settledCalls > c.totalCalls) return null;
+    charge = { settledWei: c.settledWei, settledMicroUsd: c.settledMicroUsd, pendingMicroUsd: c.pendingMicroUsd, settledCalls: c.settledCalls, totalCalls: c.totalCalls };
+  }
+  return { version: 1, status: 'completed', startedAt: iso(run.startedAt), finishedAt: iso(run.finishedAt), events, omittedEvents: run.omittedEvents, charge };
+}
 
 /** Private, deterministic notices. Collection reads saved state only. */
 export class ExperienceNotifications {
@@ -73,36 +135,50 @@ export class ExperienceNotifications {
 
 /** Opt-in immutable-content snapshots. No private project is exposed by lookup. */
 export class ShowcaseDirectory {
-  #store; #projectForOwner; #origin; #now;
-  constructor({ file, key, projectForOwner, origin = 'https://veyl.sh', now = Date.now } = {}) {
+  #store; #projectForOwner; #jobsForOwnerProject; #origin; #now;
+  constructor({ file, key, projectForOwner, jobsForOwnerProject = () => [], origin = 'https://veyl.sh', now = Date.now } = {}) {
     if (typeof projectForOwner !== 'function') throw new TypeError('An owner-scoped project resolver is required.');
     const url = new URL(origin); if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new TypeError('Use the public HTTPS origin.');
-    this.#origin = url.origin; this.#projectForOwner = projectForOwner; this.#now = now;
+    if (typeof jobsForOwnerProject !== 'function') throw new TypeError('An owner-scoped job resolver is required.');
+    this.#origin = url.origin; this.#projectForOwner = projectForOwner; this.#jobsForOwnerProject = jobsForOwnerProject; this.#now = now;
     this.#store = new SealedState(file, key, 'public-showcase-directory', { version: 1, pages: [], audit: [] });
     const s = this.#store.data;
     if (s.version !== 1 || !Array.isArray(s.pages) || s.pages.length > 100 || !Array.isArray(s.audit) || s.audit.length > 200 || Buffer.byteLength(JSON.stringify(s)) > 8 * 1024 * 1024 || s.pages.some(page => !projectId(page.projectId) || !/^0x[a-f0-9]{40}$/.test(page.owner) || !/^[A-Za-z0-9_-]{24}$/.test(page.slug) || typeof page.active !== 'boolean' || !isObject(page.public) || !Array.isArray(page.public.artifacts))) throw new Problem('Public showcase state needs recovery.', 503);
   }
   get healthy() { return this.#store.healthy; }
   #project(owner, id) { if (!projectId(id)) throw new Problem('Invalid project.'); const p = this.#projectForOwner(ownerAddress(owner), id); if (!p || p.id !== id) throw new Problem('Project not found.', 404); return p; }
-  #owned(row) { return row?.active ? { slug: row.slug, url: `${this.#origin}/agents/${row.slug}`, title: row.public.title, description: row.public.description, artifactIds: row.public.artifacts.map(item => item.id), updatedAt: row.public.updatedAt } : null; }
+  #owned(row) { return row?.active ? { slug: row.slug, url: `${this.#origin}/agents/${row.slug}`, title: row.public.title, description: row.public.description, artifactIds: row.public.artifacts.map(item => item.id), includeRunHistory: row.includeRunHistory === true, updatedAt: row.public.updatedAt } : null; }
   owned(owner, id) { this.#project(owner, id); return { showcase: this.#owned(this.#store.data.pages.find(row => row.owner === ownerAddress(owner) && row.projectId === id)) }; }
-  publish(owner, input) {
-    fields(input, ['projectId', 'title', 'description', 'artifactIds']); owner = ownerAddress(owner);
+  #prepare(owner, input) {
+    fields(input, ['projectId', 'title', 'description', 'artifactIds', 'includeRunHistory', 'previewDigest']); owner = ownerAddress(owner);
+    if (input.includeRunHistory !== undefined && typeof input.includeRunHistory !== 'boolean') throw new Problem('Choose whether to share run history.');
     const p = this.#project(owner, input.projectId), title = text(input.title, 100, 'public title'), description = text(input.description, 600, 'public description');
     if (!Array.isArray(input.artifactIds) || input.artifactIds.length < 1 || input.artifactIds.length > 5 || new Set(input.artifactIds).size !== input.artifactIds.length) throw new Problem('Select one to five saved results.');
+    const jobs = input.includeRunHistory === true ? this.#jobsForOwnerProject(owner, p.id) : [];
     const artifacts = input.artifactIds.map((id, index) => {
       if (!projectId(id)) throw new Problem('Invalid saved result.');
       const artifact = p.artifacts.find(item => item.id === id);
       if (!artifact || !['demo', 'zkapi'].includes(artifact.mode) || typeof artifact.content !== 'string' || !artifact.content.trim() || artifact.content.length > 32000 || !Number.isFinite(Date.parse(artifact.at))) throw new Problem('Selected saved result was not found or cannot be shared.', 404);
       // Saved titles are often copied from private prompts. Never export them.
-      return { id, title: `Result ${index + 1}`, content: artifact.content, at: artifact.at, mode: artifact.mode };
+      const run = input.includeRunHistory === true ? sharedRun(p, artifact, jobs) : null;
+      return { id, title: `Result ${index + 1}`, content: artifact.content, at: artifact.at, mode: artifact.mode, ...(run ? { run } : {}) };
     });
+    const preview = { title, description, artifacts };
+    if (Buffer.byteLength(JSON.stringify(preview)) > 97000) throw new Problem('Selected public results exceed the 96 KB page limit. Share fewer or shorter results.', 413);
+    return { preview, previewDigest: hash(['showcase-preview-v1', owner, p.id, input.includeRunHistory === true, preview]), includeRunHistory: input.includeRunHistory === true };
+  }
+  preview(owner, input) { return this.#prepare(owner, input); }
+  publish(owner, input) {
+    const prepared = this.#prepare(owner, input); owner = ownerAddress(owner);
+    if ((prepared.includeRunHistory || input.previewDigest !== undefined) && input.previewDigest !== prepared.previewDigest) throw new Problem('Public content changed or was not reviewed. Preview it again before publishing.', 409);
+    const { title, description, artifacts } = prepared.preview;
+    const p = this.#project(owner, input.projectId);
     let row = this.#store.data.pages.find(item => item.owner === owner && item.projectId === p.id);
     const at = iso(this.#now()), slug = row?.active ? row.slug : randomBytes(18).toString('base64url');
     const page = { slug, title, description, artifacts, publishedAt: row?.active ? row.public.publishedAt : at, updatedAt: at };
     if (Buffer.byteLength(JSON.stringify(page)) > 98304) throw new Problem('Selected public results exceed the 96 KB page limit. Share fewer or shorter results.', 413);
     if (!row && this.#store.data.pages.length >= 100) throw new Problem('Public page capacity reached.', 409);
-    const next = { owner, projectId: p.id, slug, active: true, public: page };
+    const next = { owner, projectId: p.id, slug, active: true, includeRunHistory: prepared.includeRunHistory, public: page };
     const state = { ...this.#store.data, pages: [...this.#store.data.pages.filter(item => item !== row), next], audit: [...this.#store.data.audit, { id: randomUUID(), action: row?.active ? 'update' : 'publish', owner, projectId: p.id, slug, at }].slice(-200) };
     if (Buffer.byteLength(JSON.stringify(state)) > 8 * 1024 * 1024) throw new Problem('Public page storage capacity reached.', 507);
     this.#store.data = state; this.#store.save(); return { showcase: this.#owned(next) };
@@ -119,6 +195,9 @@ export class ShowcaseDirectory {
     const row = this.#store.data.pages.find(item => item.active && item.slug === slug);
     if (!row) throw new Problem('Public agent page not found.', 404);
     const page = row.public;
-    return { page: { slug: page.slug, title: page.title, description: page.description, publishedAt: page.publishedAt, updatedAt: page.updatedAt, artifacts: page.artifacts.map(({ id, title, content, at, mode }) => ({ id, title, content, at, mode })) } };
+    return { page: { slug: page.slug, title: page.title, description: page.description, publishedAt: page.publishedAt, updatedAt: page.updatedAt, artifacts: page.artifacts.map(({ id, title, content, at, mode, run }) => {
+      const safeRun = row.includeRunHistory === true ? publishedRun(run) : null;
+      return { id, title, content, at, mode, ...(safeRun ? { run: safeRun } : {}) };
+    }) } };
   }
 }

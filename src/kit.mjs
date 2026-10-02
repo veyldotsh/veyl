@@ -43,7 +43,7 @@ export class Kit {
     if (policy.daily > policy.total || policy.request > policy.daily) throw new Problem('Use per-request ≤ daily ≤ total allowance.');
     const p = { id: randomUUID(), requestKey, fingerprint, name, symbol, purpose: text(input.purpose, 2000, 'purpose'), template: input.template,
       swarm: input.swarm, status: 'active', model: text(input.model, 256, 'model'), policy, committed: 0, days: {}, notes: [], sources: [], artifacts: [],
-      schedule: null, chain: null, createdAt: this.now().toISOString(), events: [{ at: this.now().toISOString(), type: 'created', message: 'Local runtime created. Token deployment is a separate local-chain step.' }] };
+      schedule: null, chain: null, createdAt: this.now().toISOString(), events: [{ at: this.now().toISOString(), type: 'created', message: 'Agent workspace created. Token deployment is a separate step.' }] };
     this.store.assertCapacity(serializedBytes(p) + 1024); this.store.data.projects.push(p); this.store.save(); return p;
   }
   event(p, type, message) {

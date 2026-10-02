@@ -79,6 +79,7 @@ for (const name of ['VeylMainLiquidityBuilder','VeylMainLiquidityDeployer','Veyl
 }
 console.log('Required compiled artifacts are present. No chain write was requested.');
 NODE
+bounded_prepare /usr/bin/node "$release/scripts/check-standard-launch-artifact.mjs" "$release"
 if [[ ! -e "$base/worker-data.ext4" ]]; then nice -n 19 ionice -c 3 bash "$release/deployment/create-data-volume.sh"; fi
 install -o root -g root -m 644 <(veyl_render "$release/deployment/veyl-data.mount") "$mount_file"
 systemctl daemon-reload

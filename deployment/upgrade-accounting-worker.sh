@@ -85,6 +85,7 @@ for (const name of ['VeylMainLiquidityBuilder','VeylMainLiquidityDeployer','Veyl
 }
 console.log('Compiled artifacts, ABI exports and deployment sizes passed.');
 NODE
+prep /usr/bin/node "$release/scripts/check-standard-launch-artifact.mjs" "$release"
 for port in 19800 19801; do [[ -z "$(ss -H -ltn "sport = :$port")" ]] || fail 'Smoke port occupied; existing owner preserved.'; done
 # EnvironmentFile overrides --setenv. Apply candidate overrides in the command.
 systemd-run --quiet --wait --pipe --collect --unit="veyl-accounting-smoke-$$" --uid="$service_user" --gid="$service_user" --setenv=VEYL_HOME="$base" --setenv=VEYL_SERVICE_USER="$service_user" \

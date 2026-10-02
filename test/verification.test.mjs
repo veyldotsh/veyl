@@ -35,7 +35,7 @@ test('default dry-run makes no RPC call or explorer submission', async () => {
 });
 
 test('verification recognizes converter and factory builders with each exact artifact target', () => {
-  const paths = { QuoteRevenueRouter: 'src/QuoteRevenueRouter.sol', VeylProjectBuilder: 'src/market/VeylProjectBuilder.sol', VeylMarketBuilder: 'src/market/VeylMarketBuilder.sol', VeylLiquidityBuilder: 'src/market/VeylLiquidityBuilder.sol', VeylLiquidityDeployer: 'src/market/VeylLiquidityDeployer.sol' };
+  const paths = { VeylAgentLaunchFactory: 'src/market/VeylAgentLaunchFactory.sol', QuoteRevenueRouter: 'src/QuoteRevenueRouter.sol', VeylProjectBuilder: 'src/market/VeylProjectBuilder.sol', VeylMarketBuilder: 'src/market/VeylMarketBuilder.sol', VeylLiquidityBuilder: 'src/market/VeylLiquidityBuilder.sol', VeylLiquidityDeployer: 'src/market/VeylLiquidityDeployer.sol' };
   for (const [name, source] of Object.entries(paths)) {
     const input = manifest(); input.contracts[0].contract = name;
     const result = prepareVerification(input, { verifySources() {}, readArtifact() { const value = compiled(); value.metadata.settings.compilationTarget = { [source]: name }; return value; } });

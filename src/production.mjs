@@ -44,7 +44,7 @@ export class TenantRegistry {
     this.runtimeFactory = runtimeFactory; this.socialSettings = socialSettings; this.socials = new Map(); mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     this.developerKeys = new DeveloperKeys({ file: resolve(this.directory, 'developer-keys.sealed.json'), key, now: () => +this.now() });
     this.notifications = new Map(); this.socialCursors = new Map();
-    this.showcase = new ShowcaseDirectory({ file: resolve(this.directory, 'showcase.sealed.json'), key, origin: socialSettings.publicOrigin || 'https://veyl.sh', now: () => +this.now(), projectForOwner: (owner, id) => this.get(owner).project(id) });
+    this.showcase = new ShowcaseDirectory({ file: resolve(this.directory, 'showcase.sealed.json'), key, origin: socialSettings.publicOrigin || 'https://veyl.sh', now: () => +this.now(), projectForOwner: (owner, id) => this.get(owner).project(id), jobsForOwnerProject: (owner, id) => this.get(owner).store.data.jobs.filter(job => job.projectId === id) });
     this.feeKeeper = feeKeeper; this.lastFeeTick = 0;
     this.treasuryOperator = treasuryOperator; this.lastRunwayTick = 0;
     this.conversionKeeper = conversionKeeper; this.lastConversionTick = 0;
@@ -540,6 +540,7 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
           if (req.method === 'POST') {
             if (Object.hasOwn(body, 'projectId')) throw new Problem('Project selection belongs in the route.');
             kit.store.assertHealthy();
+            if (parts.length === 5 && parts[4] === 'preview') return json(200, registry.showcase.preview(session.address, { ...body, projectId: project.id }));
             if (parts.length === 4) { registry.resources.assertCapacity(); return json(200, registry.showcase.publish(session.address, { ...body, projectId: project.id })); }
             if (parts.length === 5 && parts[4] === 'revoke') { if (Object.keys(body).length) throw new Problem('Revocation does not accept fields.'); return json(200, registry.showcase.revoke(session.address, { projectId: project.id })); }
           }
@@ -632,6 +633,10 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
             if (parts[4] === 'inspect') return json(200, await runtime.funding.inspect());
             if (parts[4] === 'quote') return json(200, await runtime.funding.quote(body));
             if (parts[4] === 'refresh') return json(200, await runtime.funding.refresh(body.intentId));
+            if (parts[4] === 'abandon-unsigned') {
+              if (url.search || Object.keys(body).length !== 1 || typeof body.intentId !== 'string') throw new Problem('Provide only the saved unsigned funding intent ID.');
+              return json(200, await runtime.funding.abandonUnsigned(body.intentId));
+            }
             if (parts[4] === 'recover') return json(200, await runtime.funding.recover(body.intentId));
             if (parts[4] === 'operation-inspect') return json(200, await runtime.funding.inspectOperation(body.kind));
             if (parts[4] === 'operation-quote') {

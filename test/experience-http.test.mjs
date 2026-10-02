@@ -52,6 +52,14 @@ test('owner controls, scoped reads, private notifications and revocable public s
   assert.equal((await request('/api/notifications')).body.unread, 0);
   assert.equal((await request('/api/notifications/ack', { csrf: 'wrong', body: { id: 'all' } })).status, 403);
   const input = { title: 'Public research', description: 'Selected findings', artifactIds: [artifact.id] };
+  const historyInput = { ...input, includeRunHistory: true };
+  assert.equal((await request(base + '/showcase/preview', { session: null, body: historyInput })).status, 401);
+  assert.equal((await request(base + '/showcase/preview', { csrf: 'wrong', body: historyInput })).status, 403);
+  assert.equal((await request(base + '/showcase/preview', { session: sessions[1], body: historyInput })).status, 404);
+  const preview = await request(base + '/showcase/preview', { body: historyInput }); assert.equal(preview.status, 200); assert.equal(preview.body.preview.artifacts[0].run, undefined);
+  assert.equal((await request(base + '/showcase')).body.showcase, null, 'preview must not publish');
+  assert.equal((await request(base + '/showcase', { body: historyInput })).status, 409);
+  assert.equal((await request(base + '/showcase', { body: { ...historyInput, previewDigest: preview.body.previewDigest } })).status, 200);
   assert.equal((await request(base + '/showcase', { body: { ...input, projectId: project.id } })).status, 400);
   assert.equal((await request(base + '/showcase', { session: sessions[1], body: input })).status, 404);
   const shared = await request(base + '/showcase', { body: input }); assert.equal(shared.status, 200);

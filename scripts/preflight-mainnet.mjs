@@ -10,7 +10,7 @@ const SCHEMA = {
   chainId: null,
   project: { name: null, symbol: null, launchSalt: null, launchSaltLabel: null },
   addresses: { deployer: null, owner: null, operator: null, protocolRecipient: null, poolInitializer: null },
-  agentMarkets: { mainMarketFactory: null, quoteAsset: null, conversionSwapRouter: null, marketFactory: null, tickSpacing: null, sharedInfrastructure: null },
+  agentMarkets: { mainMarketFactory: null, quoteAsset: null, conversionSwapRouter: null, marketFactory: null, tickSpacing: null, sharedInfrastructure: null, standardLaunch: null, standardFactory: null },
   funding: { initialTreasuryEth: null, dailyTreasuryLimitEth: null, initialLiquidityEth: null, initialLiquidityTokens: null },
   trading: { buyFeeBps: null, sellFeeBps: null, lpFeePips: null, tickSpacing: null, initialSqrtPriceX96: null, liquidityCustodyPolicy: null, launchProtection: null, liquidityCustody: null },
   mainTokenLaunch: { positionManager: null, recipient: null, startingFdvEth: null, actualStartingFdvEth: null, sqrtPriceX96: null, liquidityEth: null, targetLiquidityTokens: null, maximumCreatorTokens: null, tickLower: null, tickUpper: null, roundingPolicy: null, maximumRoundingDustWei: null },
@@ -18,7 +18,7 @@ const SCHEMA = {
   confirmations: { freshSignerConfirmed: null },
 };
 
-const OPTIONAL = new Set(['project.launchSalt', 'project.launchSaltLabel', 'agentMarkets.tickSpacing', 'agentMarkets.sharedInfrastructure', 'trading.liquidityCustody', 'mainTokenLaunch']);
+const OPTIONAL = new Set(['project.launchSalt', 'project.launchSaltLabel', 'agentMarkets.tickSpacing', 'agentMarkets.sharedInfrastructure', 'agentMarkets.standardLaunch', 'agentMarkets.standardFactory', 'trading.liquidityCustody', 'mainTokenLaunch']);
 const MAIN_SALT_LABEL = 'veyl:ethereum:main-token:v1', MAIN_SALT = keccak256(stringToHex(MAIN_SALT_LABEL));
 function publicSchema(value, schema, parent = '') {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected a public configuration object.');
@@ -48,6 +48,12 @@ export function validateConfig(config) {
   for (const key of ['mainMarketFactory', 'quoteAsset', 'conversionSwapRouter', 'marketFactory']) check(`agentMarkets.${key}`, value => typeof value === 'string' && isAddress(value) && value.toLowerCase() !== zeroAddress);
   if (config.agentMarkets.tickSpacing !== undefined) check('agentMarkets.tickSpacing', value => Number.isInteger(value) && value > 0 && value <= 32767);
   if (config.agentMarkets.sharedInfrastructure !== undefined) check('agentMarkets.sharedInfrastructure', value => typeof value === 'boolean');
+  if (config.agentMarkets.standardLaunch !== undefined) check('agentMarkets.standardLaunch', value => typeof value === 'boolean');
+  if (config.agentMarkets.standardLaunch === true) {
+    if (!config.agentMarkets.standardFactory) missing.push('agentMarkets.standardFactory');
+    else check('agentMarkets.standardFactory', value => typeof value === 'string' && isAddress(value) && value.toLowerCase() !== zeroAddress && value.toLowerCase() !== config.agentMarkets.marketFactory?.toLowerCase());
+    if (config.agentMarkets.sharedInfrastructure !== true) invalid.push('agentMarkets.standardLaunch.requiresSharedInfrastructure');
+  } else if (config.agentMarkets.standardFactory !== undefined && config.agentMarkets.standardFactory !== null) check('agentMarkets.standardFactory', value => typeof value === 'string' && isAddress(value) && value.toLowerCase() !== zeroAddress);
   if (config.project.launchSalt !== undefined) check('project.launchSalt', value => value === MAIN_SALT);
   if (config.project.launchSaltLabel !== undefined) check('project.launchSaltLabel', value => value === MAIN_SALT_LABEL);
   const decimal = value => typeof value === 'string' && /^(0|[1-9]\d*)(\.\d{1,18})?$/.test(value);

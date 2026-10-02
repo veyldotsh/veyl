@@ -63,10 +63,32 @@ export function formatPublicResult(content) {
   }
   return blocks.join('');
 }
+const runRoles = new Set(['Planner', 'Researcher', 'Developer', 'Writer', 'Reviewer', 'Model stage']);
+const runTools = { read_source: 'Read source', chain_read: 'Read Ethereum balance', save_note: 'Save project note', prepare_social_draft: 'Prepare social draft' };
+function historySource(value) {
+  const link = typeof value === 'string' ? sourceLink(value) : null;
+  if (!link) return null;
+  const url = new URL(link);
+  return !url.search && !url.hash && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(url.hostname) ? link : null;
+}
+const validTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const usdExact = value => '$' + (value / 1e6).toFixed(6);
+export function renderPublicRun(run, mode) {
+  if (!run) return '';
+  if (run.version !== 1 || run.status !== 'completed' || !validTime(run.startedAt) || !validTime(run.finishedAt) || !Array.isArray(run.events) || run.events.length > 64 || !Number.isSafeInteger(run.omittedEvents) || run.omittedEvents < 0 || run.events.some(event => !event || !validTime(event.at) || !validTime(event.finishedAt) || (event.type === 'stage' ? !runRoles.has(event.role) || !['completed', 'not-dispatched'].includes(event.status) : event.type !== 'tool' || !Object.hasOwn(runTools, event.tool) || !['completed', 'failed'].includes(event.status)))) throw Error('Shared run history could not be verified.');
+  let cost = mode === 'demo' ? '<p>Simulated run. No paid inference charge.</p>' : '<p>Usage record unavailable. This is not a zero-cost claim.</p>';
+  if (mode === 'zkapi' && run.charge !== null) {
+    const charge = run.charge;
+    if (!charge || typeof charge.settledWei !== 'string' || !/^(0|[1-9][0-9]{0,77})$/.test(charge.settledWei) || !['settledMicroUsd', 'pendingMicroUsd', 'settledCalls', 'totalCalls'].every(key => Number.isSafeInteger(charge[key]) && charge[key] >= 0) || charge.settledCalls > charge.totalCalls) throw Error('Shared usage record could not be verified.');
+    const wei = BigInt(charge.settledWei), fraction = (wei % 10n ** 18n).toString().padStart(18, '0').replace(/0+$/, '');
+    cost = `<dl class="public-run-cost"><div><dt>Confirmed settled charge</dt><dd>${wei / 10n ** 18n}${fraction ? '.' + fraction : ''} ETH</dd></div><div><dt>Saved USD valuation</dt><dd>${usdExact(charge.settledMicroUsd)}</dd></div><div><dt>Unresolved budget held</dt><dd>${usdExact(charge.pendingMicroUsd)}</dd></div></dl><p>${charge.settledCalls} of ${charge.totalCalls} calls settled in this snapshot. Held budget is not confirmed spend.</p>`;
+  }
+  return `<details class="public-run"><summary>Selected run history &amp; costs</summary><p class="public-run-note">Owner-approved snapshot of this completed result’s recorded run. It is not a complete agent archive or a live stream. Charges do not include funding principal or transaction gas.</p><p>Started ${esc(date(run.startedAt))}<br>Finished ${esc(date(run.finishedAt))}</p>${cost}<ol class="public-run-events">${run.events.map(event => { const source = historySource(event.source); return `<li><div><strong>${esc(event.type === 'stage' ? event.role : runTools[event.tool])}</strong><span>${event.status === 'not-dispatched' ? 'Not dispatched' : event.status === 'failed' ? 'Failed' : 'Completed'}</span></div><time datetime="${esc(event.at)}">${esc(date(event.at))}</time><small>Finished ${esc(date(event.finishedAt))}</small>${source ? `<a href="${esc(source)}" target="_blank" rel="noopener noreferrer">${esc(source)}</a>` : ''}</li>`; }).join('')}</ol>${run.omittedEvents ? `<p>${run.omittedEvents} additional recorded events are outside this bounded snapshot.</p>` : ''}</details>`;
+}
 export function renderPublicAgent(result, slug) {
   const page = result?.page;
   if (!page || page.slug !== slug || typeof page.title !== 'string' || page.title.length > 100 || typeof page.description !== 'string' || page.description.length > 600 || !Array.isArray(page.artifacts) || !page.artifacts.length || page.artifacts.length > 5 || page.artifacts.some(artifact => typeof artifact.title !== 'string' || typeof artifact.content !== 'string' || artifact.content.length > MAX_RESULT_LENGTH || !['demo','zkapi'].includes(artifact.mode))) throw Error('This agent page is unavailable.');
-  return `<section class="public-agent-heading"><p class="section-number">SELECTED WORK · SHARED BY ITS OWNER</p><h1>${esc(page.title)}</h1><p class="public-agent-description">${esc(page.description)}</p><p class="public-agent-date">Updated ${esc(date(page.updatedAt))} · ${page.artifacts.length} shared result${page.artifacts.length === 1 ? '' : 's'}</p></section><section class="public-agent-results" aria-label="Shared results">${page.artifacts.map((artifact, index) => `<article><div class="public-result-heading"><span class="section-number">${String(index + 1).padStart(2, '0')}</span><h2>${esc(artifact.title)}</h2><span>${artifact.mode === 'demo' ? 'Simulated output' : 'Model output'}</span></div><p class="public-agent-date">${esc(date(artifact.at))}</p><div class="public-result-content">${formatPublicResult(artifact.content)}</div></article>`).join('')}</section><p class="public-agent-note">These are results selected by this agent’s owner. Generated findings may contain errors. Publication is not a verification or endorsement by Veyl.</p>`;
+  return `<section class="public-agent-heading"><p class="section-number">SELECTED WORK · SHARED BY ITS OWNER</p><h1>${esc(page.title)}</h1><p class="public-agent-description">${esc(page.description)}</p><p class="public-agent-date">Updated ${esc(date(page.updatedAt))} · ${page.artifacts.length} shared result${page.artifacts.length === 1 ? '' : 's'}</p></section><section class="public-agent-results" aria-label="Shared results">${page.artifacts.map((artifact, index) => `<article><div class="public-result-heading"><span class="section-number">${String(index + 1).padStart(2, '0')}</span><h2>${esc(artifact.title)}</h2><span>${artifact.mode === 'demo' ? 'Simulated output' : 'Model output'}</span></div><p class="public-agent-date">${esc(date(artifact.at))}</p><div class="public-result-content">${formatPublicResult(artifact.content)}</div>${renderPublicRun(artifact.run, artifact.mode)}</article>`).join('')}</section><p class="public-agent-note">These are results selected by this agent’s owner. Generated findings may contain errors. Publication is not a verification or endorsement by Veyl.</p>`;
 }
 export async function loadPublicAgent(element, { pathname = globalThis.location?.pathname || '', fetcher = fetch } = {}) {
   const match = /^\/agents\/([A-Za-z0-9_-]{24})\/?$/.exec(pathname);

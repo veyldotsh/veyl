@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ExperienceNotifications, ShowcaseDirectory } from '../src/experience.mjs';
 import { Problem } from '../src/agent.mjs';
+import { SealedState } from '../src/encrypted-state.mjs';
 
 const owner = '0x1111111111111111111111111111111111111111', other = '0x2222222222222222222222222222222222222222', at = '2026-10-02T12:00:00.000Z';
 function fixture(t) {
@@ -16,6 +17,89 @@ function fixture(t) {
   const notificationsConfig = { file: join(dir, 'notifications.sealed.json'), key, owner, now: () => at };
   return { dir, project, otherProject, config, notificationsConfig, showcase: new ShowcaseDirectory(config), notifications: new ExperienceNotifications(notificationsConfig) };
 }
+
+function historyFixture(t) {
+  const f = fixture(t), artifact = f.project.artifacts[0], jobId = randomUUID(), finishedAt = '2026-10-02T12:01:00.000Z';
+  artifact.jobId = jobId;
+  const job = { id: jobId, projectId: f.project.id, artifactId: artifact.id, status: 'completed', mode: 'zkapi', at, finishedAt, reservation: 1000100, prompt: 'PRIVATE JOB PROMPT', account: owner,
+    steps: [{ role: 'Researcher', status: 'completed', at, finishedAt, output: artifact.content, reasoning: 'PRIVATE THOUGHTS', callAccounting: { status: 'settled', chargeWei: '1234567890', valuationMicroUsd: 100 }, additionalCalls: [{ callAccounting: { status: 'pending' } }], toolActivity: [
+      { name: 'read_source', status: 'completed', at, finishedAt, evidence: { source: 'https://eips.ethereum.org/EIPS/eip-7702' }, arguments: { secret: 'PRIVATE ARGUMENT' }, result: { raw: 'PRIVATE RAW OUTPUT' } },
+      { name: 'read_source', status: 'failed', at, finishedAt, evidence: { source: 'https://ethereum.org/?token=SECRETQUERY' }, error: 'PRIVATE ERROR' },
+      { name: 'chain_read', status: 'completed', at, finishedAt, result: { address: owner } }
+    ] }] };
+  const jobs = [job]; f.config.jobsForOwnerProject = (who, id) => who === owner && id === f.project.id ? jobs : [];
+  f.showcase = new ShowcaseDirectory(f.config);
+  return { ...f, job, jobs, input: { projectId: f.project.id, title: 'Public work', description: 'Chosen result and run.', artifactIds: [artifact.id], includeRunHistory: true } };
+}
+
+test('run sharing is default-off, explicitly previewed, allowlisted, bounded and persists as a non-live snapshot', t => {
+  const f = historyFixture(t), legacy = f.showcase.publish(owner, { ...f.input, includeRunHistory: false }).showcase;
+  assert.equal(f.showcase.public(legacy.slug).page.artifacts[0].run, undefined);
+  assert.throws(() => f.showcase.publish(owner, f.input), error => error.status === 409);
+  const reviewed = f.showcase.preview(owner, f.input), run = reviewed.preview.artifacts[0].run;
+  assert.equal(f.showcase.public(legacy.slug).page.artifacts[0].run, undefined, 'preview never publishes');
+  assert.equal(run.events.length, 4); assert.equal(run.events[1].source, 'https://eips.ethereum.org/EIPS/eip-7702'); assert.equal(run.events[2].source, undefined);
+  assert.deepEqual(run.charge, { settledWei: '1234567890', settledMicroUsd: 100, pendingMicroUsd: 1000000, settledCalls: 1, totalCalls: 2 });
+  const saved = f.showcase.publish(owner, { ...f.input, previewDigest: reviewed.previewDigest }).showcase;
+  const publicText = JSON.stringify(f.showcase.public(saved.slug));
+  for (const secret of ['PRIVATE', 'SECRETQUERY', owner, f.project.id, f.job.id, 'requestHash', 'journalId']) assert.equal(publicText.includes(secret), false, secret);
+  f.job.reservation = 100; f.job.steps[0].additionalCalls = [];
+  assert.equal(new ShowcaseDirectory(f.config).public(saved.slug).page.artifacts[0].run.charge.pendingMicroUsd, 1000000, 'later settlement is not auto-published');
+  assert.equal(readFileSync(f.config.file, 'utf8').includes('1234567890'), false);
+  assert.equal(saved.includeRunHistory, true);
+  f.showcase.revoke(owner, { projectId: f.project.id }); assert.throws(() => f.showcase.public(saved.slug), error => error.status === 404);
+});
+
+test('history review digest binds exact selected content, costs and owner without weakening access isolation', t => {
+  const f = historyFixture(t), reviewed = f.showcase.preview(owner, f.input);
+  assert.throws(() => f.showcase.preview(other, f.input), error => error.status === 404);
+  assert.throws(() => f.showcase.publish(other, { ...f.input, previewDigest: reviewed.previewDigest }), error => error.status === 404);
+  assert.throws(() => f.showcase.publish(owner, { ...f.input, title: 'Changed', previewDigest: reviewed.previewDigest }), error => error.status === 409);
+  f.job.reservation++;
+  assert.throws(() => f.showcase.publish(owner, { ...f.input, previewDigest: reviewed.previewDigest }), error => error.status === 409);
+  const next = f.showcase.preview(owner, f.input); f.project.artifacts[0].content += ' Later edit';
+  assert.throws(() => f.showcase.publish(owner, { ...f.input, previewDigest: next.previewDigest }), error => error.status === 409);
+  assert.equal(f.showcase.owned(owner, f.project.id).showcase, null);
+  assert.throws(() => f.showcase.preview(owner, { ...f.input, includeRunHistory: 'true' }));
+});
+
+test('unreliable result linkage omits history and invalid private metadata cannot become public fields', t => {
+  const f = historyFixture(t);
+  for (const override of [{ projectId: f.otherProject.id }, { artifactId: randomUUID() }, { status: 'running' }, { mode: 'demo' }]) {
+    const original = { ...f.job }; Object.assign(f.job, override);
+    assert.equal(f.showcase.preview(owner, f.input).preview.artifacts[0].run, undefined); Object.assign(f.job, original);
+  }
+  f.jobs.push({ ...f.job }); assert.equal(f.showcase.preview(owner, f.input).preview.artifacts[0].run, undefined); f.jobs.pop();
+  f.job.steps[0].role = '<script>PRIVATE ROLE</script>';
+  f.job.steps[0].toolActivity.push({ name: '<script>PRIVATE TOOL</script>', at, finishedAt: at, status: 'completed' });
+  f.job.steps[0].callAccounting.chargeWei = '<script>PRIVATE COST</script>';
+  const run = f.showcase.preview(owner, f.input).preview.artifacts[0].run;
+  assert.equal(run.events[0].role, 'Model stage'); assert.equal(run.charge, null); assert.doesNotMatch(JSON.stringify(run), /PRIVATE|<script>/);
+  for (const source of ['https://user:pass@ethereum.org/', 'javascript:alert(1)', 'https://ethereum.org/?key=x', 'https://127.0.0.1/', 'https://ethereum.org/#access_token=x']) {
+    f.job.steps[0].toolActivity[0].evidence.source = source;
+    assert.equal(f.showcase.preview(owner, f.input).preview.artifacts[0].run.events[1].source, undefined);
+  }
+  f.job.steps[0].toolActivity = Array.from({ length: 90 }, () => ({ name: 'save_note', status: 'completed', at, finishedAt: at }));
+  const bounded = f.showcase.preview(owner, f.input).preview.artifacts[0].run;
+  assert.equal(bounded.events.length, 64); assert.equal(bounded.omittedEvents, 27);
+});
+
+test('saved-plan source fallback exports only the safe URL from the private result', t => {
+  const f=historyFixture(t),action=f.job.steps[0].toolActivity[0];
+  action.initiatedBy='saved-plan';action.result={...action.evidence,text:'PRIVATE SOURCE TEXT',wallet:owner};delete action.evidence;
+  const run=f.showcase.preview(owner,f.input).preview.artifacts[0].run;
+  assert.equal(run.events[1].source,'https://eips.ethereum.org/EIPS/eip-7702');assert.doesNotMatch(JSON.stringify(run),/PRIVATE SOURCE TEXT|wallet/);
+});
+
+test('public reads reconstruct nested history from sealed state and never export unknown private metadata', t => {
+  const f=historyFixture(t),preview=f.showcase.preview(owner,f.input),saved=f.showcase.publish(owner,{...f.input,previewDigest:preview.previewDigest}).showcase;
+  const state=new SealedState(f.config.file,f.config.key,'public-showcase-directory',{}),run=state.data.pages[0].public.artifacts[0].run;
+  run.prompt='PRIVATE MALFORMED PROMPT';run.wallet=owner;run.events[0].arguments={secret:'PRIVATE MALFORMED ARGS'};run.events[1].rawOutput='PRIVATE MALFORMED OUTPUT';run.charge.receipt={secret:'PRIVATE RECEIPT'};state.save();
+  const publicData=new ShowcaseDirectory(f.config).public(saved.slug);
+  assert.ok(publicData.page.artifacts[0].run);assert.doesNotMatch(JSON.stringify(publicData),/PRIVATE|wallet|arguments|rawOutput|receipt/);
+  run.charge.settledWei='PRIVATE INVALID AMOUNT';state.save();
+  assert.equal(new ShowcaseDirectory(f.config).public(saved.slug).page.artifacts[0].run,undefined);
+});
 
 test('public pages contain only selected saved outputs and explicit public text, never default private metadata', t => {
   const f = fixture(t), input = { projectId: f.project.id, title: 'Public research', description: 'Owner-selected findings.', artifactIds: [f.project.artifacts[0].id] };

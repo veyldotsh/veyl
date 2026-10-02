@@ -59,6 +59,7 @@ test('restart marks unfinished work interrupted without releasing its reservatio
 });
 test('project launch deduplicates identical requests and validates budget and symbol', () => {
   const { kit, p, input } = setup(); assert.equal(kit.create(input).id, p.id); assert.throws(() => kit.create({ ...input, name: 'Other' }), /different/);
+  assert.equal(p.events[0].message, 'Agent workspace created. Token deployment is a separate step.');
   assert.throws(() => kit.create({ ...input, requestKey: randomUUID(), symbol: '<bad>' }), /Symbol/);
   assert.throws(() => kit.create({ ...input, requestKey: randomUUID(), daily: 6_000_000 }), /allowance/);
   for (const template of ['constructor', '__proto__', 'toString']) assert.throws(() => kit.create({ ...input, requestKey: randomUUID(), template }), /Unknown template/);

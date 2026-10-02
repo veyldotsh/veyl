@@ -79,6 +79,20 @@ test('shared infrastructure mode is explicit and must be a boolean', () => {
   assert.ok(validateConfig(value).invalid.includes('agentMarkets.sharedInfrastructure'));
 });
 
+test('fixed agent launch mode requires a distinct nonzero shared factory without changing main-token terms', () => {
+  const value = structuredClone(approved);
+  value.agentMarkets.standardLaunch = true;
+  assert.ok(validateConfig(value).missing.includes('agentMarkets.standardFactory'));
+  value.agentMarkets.standardFactory = value.agentMarkets.marketFactory;
+  assert.ok(validateConfig(value).invalid.includes('agentMarkets.standardFactory'));
+  value.agentMarkets.standardFactory = '0x5555555555555555555555555555555555555555';
+  assert.deepEqual(validateConfig(value).invalid, ['confirmations.freshSignerConfirmed']);
+  value.agentMarkets.sharedInfrastructure = false;
+  assert.ok(validateConfig(value).invalid.includes('agentMarkets.standardLaunch.requiresSharedInfrastructure'));
+  value.agentMarkets.standardLaunch = 'true';
+  assert.ok(validateConfig(value).invalid.includes('agentMarkets.standardLaunch'));
+});
+
 test('offline preflight never calls network verification and cannot authorize deployment', async () => {
   const report = await preflight(config(), { offline: true, verify: () => { throw new Error('network called'); }, artifacts: async () => [] });
   assert.equal(report.mode, 'read-only-no-signing');

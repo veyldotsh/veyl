@@ -63,6 +63,7 @@ export function createApp(kit, { showcase = null, notifications = null, socialFo
           if (parts[3] === 'autonomy' && parts.length === 5 && parts[4] === 'run') return json(202, await kit.autonomy.run(project.id, body));
           if (parts[3] === 'showcase' && showcase) {
             if (Object.hasOwn(body, 'projectId')) throw new Problem('Project selection belongs in the route.');
+            if (parts.length === 5 && parts[4] === 'preview') return json(200, showcase.preview(owner, { ...body, projectId: project.id }));
             if (parts.length === 4) return json(200, showcase.publish(owner, { ...body, projectId: project.id }));
             if (parts.length === 5 && parts[4] === 'revoke') { if (Object.keys(body).length) throw new Problem('Revocation does not accept fields.'); return json(200, showcase.revoke(owner, { projectId: project.id })); }
           }
@@ -76,6 +77,10 @@ export function createApp(kit, { showcase = null, notifications = null, socialFo
             case 'inspect': return json(200, await kit.funding.inspect());
             case 'quote': return json(200, await kit.funding.quote(body));
             case 'refresh': return json(200, await kit.funding.refresh(body.intentId));
+            case 'abandon-unsigned': {
+              if (url.search || Object.keys(body).length !== 1 || typeof body.intentId !== 'string') throw new Problem('Provide only the saved unsigned funding intent ID.');
+              return json(200, await kit.funding.abandonUnsigned(body.intentId));
+            }
             case 'approve': return json(200, await kit.funding.approve(body));
             case 'recover': return json(200, await kit.funding.recover(body.intentId));
             case 'resume': return json(200, await kit.funding.resume(body));
