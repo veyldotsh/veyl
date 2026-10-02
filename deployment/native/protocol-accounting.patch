@@ -1,5 +1,5 @@
 diff --git a/rust/crates/zkapi-client/src/journal.rs b/rust/crates/zkapi-client/src/journal.rs
-index 0858ba9..c004f7c 100644
+index 0858ba9..c83ee00 100644
 --- a/rust/crates/zkapi-client/src/journal.rs
 +++ b/rust/crates/zkapi-client/src/journal.rs
 @@ -5,8 +5,6 @@
@@ -11,7 +11,7 @@ index 0858ba9..c004f7c 100644
  use std::path::Path;
  
  use serde::{Deserialize, Serialize};
-@@ -42,29 +40,19 @@ impl PendingRequestJournal {
+@@ -42,67 +40,40 @@ impl PendingRequestJournal {
      ///
      /// Uses write-to-temp-then-rename to guarantee crash safety.
      pub fn write(path: &Path, journal: &PendingRequestJournal) -> Result<(), ClientError> {
@@ -47,7 +47,14 @@ index 0858ba9..c004f7c 100644
          if journal.exists {
              Ok(Some(journal))
          } else {
-@@ -75,34 +63,14 @@ impl PendingRequestJournal {
+-            Ok(None)
++            // Only an absent file denotes no request. Every durable journal
++            // written by this wallet has exists=true; never overwrite a
++            // present authorization whose existence flag was corrupted.
++            Err(crate::settlement::invalid())
+         }
+     }
+ 
      /// Delete the journal file after the next state has been persisted
      /// successfully.
      pub fn clear(path: &Path) -> Result<(), ClientError> {
@@ -257,7 +264,7 @@ index 0000000..34d6cbf
 +    Ok(())
 +}
 diff --git a/rust/crates/zkapi-client/src/wallet_v2.rs b/rust/crates/zkapi-client/src/wallet_v2.rs
-index 6c11ee2..952c423 100644
+index 6c11ee2..380e444 100644
 --- a/rust/crates/zkapi-client/src/wallet_v2.rs
 +++ b/rust/crates/zkapi-client/src/wallet_v2.rs
 @@ -21,6 +21,7 @@ use crate::config::{ClientConfig, ClientProofMode};
@@ -624,7 +631,7 @@ index 6c11ee2..952c423 100644
      }
  
      fn setup_dir(&self) -> &str {
-@@ -605,3 +755,233 @@ fn state_note_leaf(state: &NoteState) -> Felt252 {
+@@ -605,3 +755,250 @@ fn state_note_leaf(state: &NoteState) -> Felt252 {
          state.expiry_ts,
      )
  }
@@ -725,6 +732,23 @@ index 6c11ee2..952c423 100644
 +            .prepare_request("new", canonical_payload_hash(b"new"), Felt252::ONE, vec![])
 +            .is_err());
 +        assert_eq!(std::fs::read(&wallet.journal_path).unwrap(), corrupt);
++        assert_eq!(wallet.state().unwrap().current_balance, 1000);
++        std::fs::remove_dir_all(directory).unwrap();
++    }
++
++    #[test]
++    fn settlement_false_existing_journal_blocks_preparation_without_overwrite() {
++        let (directory, mut wallet, _) = fixture(7);
++        let mut journal = wallet.get_pending_journal().unwrap().unwrap();
++        journal.exists = false;
++        let bytes = serde_json::to_vec(&journal).unwrap();
++        std::fs::write(&wallet.journal_path, &bytes).unwrap();
++        assert!(wallet.get_pending_journal().is_err());
++        assert!(wallet.has_pending_request());
++        assert!(wallet
++            .prepare_request("new", canonical_payload_hash(b"new"), Felt252::ONE, vec![])
++            .is_err());
++        assert_eq!(std::fs::read(&wallet.journal_path).unwrap(), bytes);
 +        assert_eq!(wallet.state().unwrap().current_balance, 1000);
 +        std::fs::remove_dir_all(directory).unwrap();
 +    }

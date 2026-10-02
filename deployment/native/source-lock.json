@@ -47,8 +47,8 @@
     {
       "name": "protocol",
       "path": "deployment/native/protocol-accounting.patch",
-      "bytes": 34656,
-      "sha256": "771e68836e1d3dc47c99cd14def72c409970e2f498993668ca2db049c01be67f",
+      "bytes": 35754,
+      "sha256": "05714739cf61dd23dfd4f02bdf74deeb12635127b1710afd3fa2561226203a6e",
       "files": [
         {
           "path": "rust/crates/zkapi-client/src/lib.rs",
@@ -58,12 +58,12 @@
         {
           "path": "rust/crates/zkapi-client/src/journal.rs",
           "originalSha256LF": "fec3e117f12ecc1e8927c203aa5c453fde4dac83875637bbee2e523aed7abff9",
-          "patchedSha256LF": "be5f7f45e0de8ee386c3046b50784840f0f39a7269ea7ed9355c40a9eaec15c4"
+          "patchedSha256LF": "651452cec0074b5e01deb3b220d1e815014b201f8ac65b50e38ccb0163cccbb5"
         },
         {
           "path": "rust/crates/zkapi-client/src/wallet_v2.rs",
           "originalSha256LF": "da31f53252e0938efdd62a6ce9516a68dfc76f26bdda6a09a88cf79c8c247838",
-          "patchedSha256LF": "f7ba3c81c17b6d073f647f2f0880c67268ec98cfc65158b35c8b6fcf63c8d83e"
+          "patchedSha256LF": "b04bbdb72795870c293230b610549dc801d148c62b5fdb6f98e51c04cab1cbe4"
         },
         {
           "path": "rust/crates/zkapi-client/src/settlement.rs",

@@ -4,8 +4,10 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'deployment/native/**'
+      - 'deployment/native/*-accounting.patch'
+      - 'deployment/native/source-lock.json'
       - 'scripts/build-native-accounting.mjs'
+      - 'scripts/patch-zkapi-control.mjs'
       - '.github/workflows/native-accounting.yml'
 
 permissions:
