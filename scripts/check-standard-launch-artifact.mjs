@@ -2,15 +2,21 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const contract = 'VeylAgentLaunchFactory';
-
 /** Offline release check. A configured address remains required even when new launches are disabled,
  * because already-created standard markets still need this artifact for status and receipt recovery. */
 export function checkStandardLaunchArtifact(release) {
+  return checkLaunchArtifact(release, 'VeylAgentLaunchFactory', 'standardLaunch', 'standardFactory');
+}
+
+export function checkExecutionLaunchArtifact(release) {
+  return checkLaunchArtifact(release, 'VeylAgentExecutionFactory', 'executionLaunch', 'executionFactory');
+}
+
+function checkLaunchArtifact(release, contract, enabledField, addressField) {
   const root = resolve(release);
   const config = JSON.parse(readFileSync(resolve(root, 'config/mainnet.json'), 'utf8'));
   const policy = config.agentMarkets || {};
-  const required = policy.standardLaunch === true || (typeof policy.standardFactory === 'string' && policy.standardFactory.length > 0);
+  const required = policy[enabledField] === true || (typeof policy[addressField] === 'string' && policy[addressField].length > 0);
   const artifactPath = resolve(root, `contracts/out/${contract}.sol/${contract}.json`);
   const abiPath = resolve(root, `contracts/abi/${contract}.json`);
   if (!required && !existsSync(artifactPath) && !existsSync(abiPath)) return { required: false, checked: false, contract };
@@ -21,15 +27,20 @@ export function checkStandardLaunchArtifact(release) {
   if (!Array.isArray(artifact.abi) || !/^0x(?:[0-9a-f]{2})+$/i.test(init || '') || !/^0x(?:[0-9a-f]{2})+$/i.test(runtime || '')) throw Error('Invalid standard launch factory artifact.');
   if ((runtime.length - 2) / 2 > 24576 || (init.length - 2) / 2 + 8 * 32 > 49152) throw Error('Standard launch factory exceeds deployment size limits.');
   const settings = artifact.metadata?.settings;
-  if (artifact.metadata?.compiler?.version !== '0.8.26+commit.8a97fa7a' || settings?.compilationTarget?.['src/market/VeylAgentLaunchFactory.sol'] !== contract || settings?.optimizer?.enabled !== true || settings.optimizer.runs !== 200 || settings.evmVersion !== 'cancun') throw Error('Standard launch compiler or target differs from the reviewed build.');
+  if (artifact.metadata?.compiler?.version !== '0.8.26+commit.8a97fa7a' || settings?.compilationTarget?.[`src/market/${contract}.sol`] !== contract || settings?.optimizer?.enabled !== true || settings.optimizer.runs !== 200 || settings.evmVersion !== 'cancun') throw Error('Standard launch compiler or target differs from the reviewed build.');
   if (JSON.stringify(exportedAbi) !== JSON.stringify(artifact.abi)) throw Error('Standard launch factory ABI differs from the compiled artifact.');
   for (const name of ['LAUNCH_POLICY_VERSION', 'standardLaunchConfig', 'previewInitialBuy', 'launch', 'launchAndBuy', 'getMarket']) {
     if (!artifact.abi.some(item => item.type === 'function' && item.name === name)) throw Error('Standard launch factory is missing required interface: ' + name);
+  }
+  if (contract === 'VeylAgentExecutionFactory') {
+    if (!artifact.abi.some(item => item.type === 'function' && item.name === 'EXECUTION_PRICED' && item.outputs?.length === 1 && item.outputs[0].type === 'bool')) throw Error('Execution launch factory is missing its pricing policy getter.');
+    const event = artifact.abi.find(item => item.type === 'event' && item.name === 'StandardLaunchTerms');
+    if (!event || JSON.stringify(event.inputs.map(input => [input.type, input.indexed])) !== JSON.stringify([['bytes32', true], ['uint160', false], ['int24', false], ['int24', false], ['uint128', false]])) throw Error('Execution launch factory is missing its exact executed-terms event.');
   }
   return { required, checked: true, contract, runtimeBytes: (runtime.length - 2) / 2, initcodeBytesWithConstructor: (init.length - 2) / 2 + 256 };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv.length !== 3) throw Error('Pass the exact candidate release directory.');
-  console.log(JSON.stringify(checkStandardLaunchArtifact(process.argv[2])));
+  console.log(JSON.stringify({ standard: checkStandardLaunchArtifact(process.argv[2]), execution: checkExecutionLaunchArtifact(process.argv[2]) }));
 }

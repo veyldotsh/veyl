@@ -5,6 +5,8 @@ const artifacts = [
   ['Funding.sol', 'RevenueRouter'], ['Funding.sol', 'JobEscrow'],
   ['VeylFeeHook.sol', 'VeylFeeHook'], ['VeylSwapRouter.sol', 'VeylSwapRouter'],
   ['VeylMarketFactory.sol', 'VeylMarketFactory'], ['VeylMarketDeployer.sol', 'VeylMarketDeployer'],
+  ['VeylAgentLaunchFactory.sol', 'VeylAgentLaunchFactory'],
+  ['VeylAgentExecutionFactory.sol', 'VeylAgentExecutionFactory'],
   ['VeylProjectDeployer.sol', 'VeylProjectDeployer'], ['VeylLiquidityVault.sol', 'VeylLiquidityVault'],
   ['VeylQuoter.sol', 'VeylQuoter'],
   ['QuoteRevenueRouter.sol', 'QuoteRevenueRouter'],

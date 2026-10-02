@@ -161,6 +161,30 @@ test('standard launch defaults to no purchase, zero treasury funding and connect
   await f.element.fire('submit', launchForm({})); assert.equal(f.requests.length, 1);
 });
 
+test('execution-priced review labels estimates and keeps exact creator-buy minimum visible without promising a locked starting price', async t => {
+  const f = await standardFixture(t), prepare = f.client.prepare;
+  f.client.capabilities = async () => ({ ...standardPolicy(), standardLaunch: { ...standardPolicy().standardLaunch, pricing: 'execution' } });
+  f.client.prepare = async (...args) => ({ ...await prepare(...args), marketVersion: 'execution-agent-v1', pricing: 'execution' });
+  await f.panel.refresh();
+  assert.match(f.element.innerHTML, /when your launch executes/);
+  await f.element.fire('submit', launchForm({ devBuyQuote: '10' }));
+  assert.match(f.element.innerHTML, /Indicative starting valuation/); assert.match(f.element.innerHTML, /Indicative liquidity seed/);
+  assert.match(f.element.innerHTML, /Minimum purchased tokens<\/dt><dd>995 RES/);
+  assert.match(f.element.innerHTML, /exact VEYL purchase amount and minimum received stay binding/);
+  assert.doesNotMatch(f.element.innerHTML, /Price changes beyond the factory limit/);
+  assert.deepEqual(f.requests[0].input, { devBuyQuote: '10', slippageBps: 50, treasuryOwner: owner, operator: owner, treasuryEth: '0', dailyLimitEth: '0' });
+});
+
+test('confirmed finite approval distinguishes a fresh execution preview from an older saved-price factory', async t => {
+  const f = await standardFixture(t), prepare = f.client.prepare;
+  for (const version of ['standard-agent-v1', 'execution-agent-v1']) {
+    f.client.prepare = async (...args) => ({ ...await prepare(...args), marketVersion: version, kind: 'approve', purpose: 'launch-creator-buy', status: 'confirmed' });
+    await f.element.fire('submit', launchForm({ devBuyQuote: '10' }));
+    assert.match(f.element.innerHTML, version === 'execution-agent-v1' ? /fresh indicative purchase quote/ : /saved price moved, explicitly refresh/);
+    if (version === 'standard-agent-v1') assert.doesNotMatch(f.element.innerHTML, /again for a fresh price/);
+  }
+});
+
 test('editing a creator buy retires both approval and launch previews before another send', async t => {
   const f = await standardFixture(t, { transactionsEnabled: true }), prepare = f.client.prepare;
   for (const approval of [false, true]) {

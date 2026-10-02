@@ -35,12 +35,22 @@ test('default dry-run makes no RPC call or explorer submission', async () => {
 });
 
 test('verification recognizes converter and factory builders with each exact artifact target', () => {
-  const paths = { VeylAgentLaunchFactory: 'src/market/VeylAgentLaunchFactory.sol', QuoteRevenueRouter: 'src/QuoteRevenueRouter.sol', VeylProjectBuilder: 'src/market/VeylProjectBuilder.sol', VeylMarketBuilder: 'src/market/VeylMarketBuilder.sol', VeylLiquidityBuilder: 'src/market/VeylLiquidityBuilder.sol', VeylLiquidityDeployer: 'src/market/VeylLiquidityDeployer.sol' };
+  const paths = { VeylAgentExecutionFactory: 'src/market/VeylAgentExecutionFactory.sol', VeylAgentLaunchFactory: 'src/market/VeylAgentLaunchFactory.sol', QuoteRevenueRouter: 'src/QuoteRevenueRouter.sol', VeylProjectBuilder: 'src/market/VeylProjectBuilder.sol', VeylMarketBuilder: 'src/market/VeylMarketBuilder.sol', VeylLiquidityBuilder: 'src/market/VeylLiquidityBuilder.sol', VeylLiquidityDeployer: 'src/market/VeylLiquidityDeployer.sol' };
   for (const [name, source] of Object.entries(paths)) {
     const input = manifest(); input.contracts[0].contract = name;
     const result = prepareVerification(input, { verifySources() {}, readArtifact() { const value = compiled(); value.metadata.settings.compilationTarget = { [source]: name }; return value; } });
     assert.equal(result.entries[0].target, `${source}:${name}`);
   }
+});
+
+test('actual execution factory artifact and current source fingerprints produce an offline verification plan', async () => {
+  const input = { version: 1, chainId: 1, contracts: [{ address, contract: 'VeylAgentExecutionFactory', constructorArgs: encodeAbiParameters(Array.from({ length: 8 }, () => ({ type: 'address' })), Array(8).fill(address)) }] };
+  const plan = prepareVerification(input);
+  assert.equal(plan.entries[0].target, 'src/market/VeylAgentExecutionFactory.sol:VeylAgentExecutionFactory');
+  const result = await executeVerification(plan);
+  assert.equal(result.explorerSubmitted, false); assert.equal(result.transactionsSent, 0);
+  const wrong = structuredClone(input); wrong.contracts[0].constructorArgs = encodeAbiParameters(Array.from({ length: 7 }, () => ({ type: 'address' })), Array(7).fill(address));
+  assert.throws(() => prepareVerification(wrong), /canonical/);
 });
 
 test('wrong chain, no deployed code, opcode mismatch and incorrect pinned hash all block before explorer contact', async () => {

@@ -156,3 +156,17 @@ test('zkAPI manifest rejects HTTP failure, malformed schema and oversized conten
   await assert.rejects(readManifest(response({ chain_id: 1 })), /Unexpected/);
   await assert.rejects(readManifest(async () => new Response('a'.repeat(1_000_001))), /size limit/);
 });
+
+test('execution-priced activation requires a separate reviewed shared factory pin and keeps old addresses distinct', () => {
+  const value = config(); value.agentMarkets.executionLaunch = true;
+  assert.ok(validateConfig(value).missing.includes('agentMarkets.executionFactory'));
+  value.agentMarkets.standardFactory = '0x5555555555555555555555555555555555555555';
+  value.agentMarkets.executionFactory = value.agentMarkets.standardFactory;
+  assert.ok(validateConfig(value).invalid.includes('agentMarkets.executionFactory'));
+  value.agentMarkets.executionFactory = '0x6666666666666666666666666666666666666666'; value.agentMarkets.sharedInfrastructure = true;
+  assert.ok(!validateConfig(value).invalid.some(field => field.startsWith('agentMarkets.execution')));
+  value.agentMarkets.sharedInfrastructure = false;
+  assert.ok(validateConfig(value).invalid.includes('agentMarkets.executionLaunch.requiresSharedInfrastructure'));
+  value.agentMarkets.executionLaunch = 'true';
+  assert.ok(validateConfig(value).invalid.includes('agentMarkets.executionLaunch'));
+});

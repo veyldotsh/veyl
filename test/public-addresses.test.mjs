@@ -55,7 +55,7 @@ test('canonical main launch rejects a different creator or treasury owner; legac
   assert.throws(() => service.launchConfig(project, { ...terms, account: other }, 1n), /configured main-token deployer/);
   assert.throws(() => service.launchConfig(project, { ...terms, treasuryOwner: other }, 1n), /configured main-token deployer/);
   const agent = { id: 'ordinary-project', name: 'Research', symbol: 'RES' };
-  const legacyConfig = structuredClone(config); Object.assign(legacyConfig.agentMarkets, { standardLaunch: false, standardFactory: null, tickSpacing: 200 });
+  const legacyConfig = structuredClone(config); Object.assign(legacyConfig.agentMarkets, { standardLaunch: false, standardFactory: null, executionLaunch: false, executionFactory: null, tickSpacing: 200 });
   const legacy = new MainnetMarkets({ config: legacyConfig, client: {} });
   const result = legacy.launchConfig(agent, { ...terms, account: other, treasuryOwner: other, liquidityQuote: '10', liquidityTokens: '100000000', tokensPerQuote: '1000000', tickLower: -887200, tickUpper: 887200 }, 1n);
   assert.equal(result.config.salt, keccak256(stringToHex('veyl:ethereum:ordinary-project'))); assert.notEqual(result.config.salt, VEYL_MAIN_TOKEN_SALT);

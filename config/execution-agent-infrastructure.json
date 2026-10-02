@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "chainId": 1,
+  "factory": "0x0f5B4Adbc0651fC5477B36952b161F7BDFEFeBCC",
+  "contract": "VeylAgentExecutionFactory",
+  "marketVersion": "execution-agent-v1",
+  "launchPolicyVersion": 3,
+  "deployment": {
+    "transactionHash": "0x76f5d4d4b661ed8557627de539d40eb04056eea15dacaf7d683dd730fbc52921",
+    "blockNumber": "26106417"
+  },
+  "explorerVerification": {
+    "checkedAtBlock": "26106421",
+    "status": "verified",
+    "contractCount": 4
+  },
+  "quoteAsset": "0x2eaB833d244352D4A7f8dC93285B1776F01954cB",
+  "conversionSwapRouter": "0xA847BE733c61a994a4D565DE41fE07528Be3cc68",
+  "previousFactory": "0x5391727eC9726f3d5F3c77d7468521a48E0A7AEa",
+  "policy": {
+    "totalSupplyTokens": "1000000000",
+    "liquidityAllocationBps": 10000,
+    "freeCreatorAllocationTokens": "0",
+    "seedQuoteWei": "0",
+    "maximumLockedDustTokenWei": "1000000",
+    "startingFdvEthTarget": "2",
+    "reference": "canonical VEYL/ETH spot price sampled at execution; not a TWAP or independent valuation oracle",
+    "tickSpacing": 1,
+    "buyFeeBps": 180,
+    "sellFeeBps": 180,
+    "lpFeePips": 0,
+    "launchProtection": false,
+    "optionalAtomicCreatorBuy": true,
+    "creatorBuyAsset": "VEYL",
+    "creatorBuyProtection": "Exact VEYL amount, signed minimum token output and deadline",
+    "liquidityCustody": "Permanent ownerless VeylLiquidityVault; seed rounding dust remains in the same vault"
+  },
+  "contracts": [
+    {
+      "contract": "VeylAgentExecutionFactory",
+      "address": "0x0f5B4Adbc0651fC5477B36952b161F7BDFEFeBCC",
+      "runtimeCodeHash": "0x363c72c372b2f54d7b0f7f70eb671826a484c333cbd7eca40e0e3d53dde93d22",
+      "explorerUrl": "https://etherscan.io/address/0x0f5B4Adbc0651fC5477B36952b161F7BDFEFeBCC#code"
+    },
+    {
+      "contract": "VeylProjectDeployer",
+      "address": "0x0F93EFd2528bF6F791f69ab67A9F85E855a1Ac73",
+      "runtimeCodeHash": "0xa25e1de48a821d175fd8d0a1d283b6b0108aa2c5f48c8a29b28f02a215f50d2f",
+      "explorerUrl": "https://etherscan.io/address/0x0F93EFd2528bF6F791f69ab67A9F85E855a1Ac73#code"
+    },
+    {
+      "contract": "VeylMarketDeployer",
+      "address": "0xEC857eFB07E69a46243781792676863F0f61ACcA",
+      "runtimeCodeHash": "0x7928dfeef357d9a8ba116e1a287f59d28b479e48406ce5b5bfaa5a5aede0584c",
+      "explorerUrl": "https://etherscan.io/address/0xEC857eFB07E69a46243781792676863F0f61ACcA#code"
+    },
+    {
+      "contract": "VeylLiquidityDeployer",
+      "address": "0x76d6911bB73A8cb5eBCf27A9eba4156515DE2f4D",
+      "runtimeCodeHash": "0x8509efba3920c7bf50774ffe07b0dac8f7c094b6e6ef6c3c3be5764dc2189c5b",
+      "explorerUrl": "https://etherscan.io/address/0x76d6911bB73A8cb5eBCf27A9eba4156515DE2f4D#code"
+    }
+  ]
+}

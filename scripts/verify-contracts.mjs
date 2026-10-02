@@ -12,6 +12,7 @@ const contracts = {
   RevenueRouter: 'src/Funding.sol', JobEscrow: 'src/Funding.sol', VeylFeeHook: 'src/hook/VeylFeeHook.sol',
   VeylSwapRouter: 'src/VeylSwapRouter.sol', VeylMarketFactory: 'src/market/VeylMarketFactory.sol',
   VeylAgentLaunchFactory: 'src/market/VeylAgentLaunchFactory.sol',
+  VeylAgentExecutionFactory: 'src/market/VeylAgentExecutionFactory.sol',
   VeylMarketDeployer: 'src/market/VeylMarketDeployer.sol', VeylProjectDeployer: 'src/market/VeylProjectDeployer.sol',
   VeylLiquidityVault: 'src/market/VeylLiquidityVault.sol', VeylQuoter: 'src/market/VeylQuoter.sol',
   QuoteRevenueRouter: 'src/QuoteRevenueRouter.sol', VeylProjectBuilder: 'src/market/VeylProjectBuilder.sol',
