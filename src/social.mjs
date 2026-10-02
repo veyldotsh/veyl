@@ -10,6 +10,7 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const secret = () => randomBytes(32).toString('base64url');
 const CHANNELS = new Set(['x', 'telegram']);
 const equivalent = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const appCredential = (value, max, optional = false) => typeof value === 'string' && value.length <= max && (optional && value === '' || /^[\x21-\x7e]+$/.test(value));
 function clean(value, max = 512) { if (typeof value !== 'string' || !value || value.length > max || /[\u0000-\u001f]/.test(value)) throw new Problem('Provider returned invalid connection data.', 502); return value; }
 function id(value) { const text = String(value); if (!/^[1-9][0-9]{0,20}$/.test(text)) throw new Problem('Provider returned an invalid account identifier.', 502); return text; }
 function chatId(value) { if (typeof value !== 'string' || !/^-?[1-9][0-9]{0,15}$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Problem('Enter the exact numeric Telegram chat ID.'); return value; }
@@ -33,12 +34,14 @@ export class SocialService {
     this.#diskHash = createHash('sha256').update(readFileSync(file)).digest('hex');
     const s = this.#store.data;
     if (s.version !== 1 || s.owner !== this.#owner || s.projectId !== projectId || !Array.isArray(s.oauth) || !Array.isArray(s.outbox) || !s.accounts || s.oauth.length > 50 || s.outbox.length > 2000) throw new Problem('Invalid encrypted social state. Preserve it for recovery.', 503);
+    if (s.xApp !== undefined && s.xApp !== null && (typeof s.xApp !== 'object' || Object.keys(s.xApp).some(key => !['clientId', 'clientSecret'].includes(key)) || !appCredential(s.xApp.clientId, 512) || !appCredential(s.xApp.clientSecret, 4096, true))) throw new Problem('Invalid encrypted X app settings. Preserve them for recovery.', 503);
     for (const entry of s.outbox) {
       if (!CHANNELS.has(entry.channel) || !['draft', 'sending', 'published', 'failed', 'unknown', 'cancelled'].includes(entry.status) || entry.approvalDigest !== digest(entry.preview)) throw new Problem('Invalid encrypted social outbox.', 503);
       if (entry.status === 'sending') entry.status = 'unknown';
     }
     for (const entry of s.oauth) if (entry.status === 'exchanging') entry.status = 'unknown';
     for (const account of Object.values(s.accounts)) if (account?.status === 'refreshing') account.status = 'reconnect_required';
+    if (s.accounts.x && !equivalent(s.accounts.x.appBinding, this.#xBinding())) s.accounts.x.status = 'reconnect_required';
   }
   #exclusive(fn) {
     if (!this.#store.healthy) return Promise.reject(new Problem('Social credential persistence is blocked.', 503));
@@ -52,7 +55,10 @@ export class SocialService {
   }
   #save() { try { this.#store.save(); this.#diskHash = createHash('sha256').update(readFileSync(this.#store.file)).digest('hex'); } catch { this.#store.healthy = false; throw new Problem('Cannot persist social authorization. Publishing is blocked.', 503); } }
   canEvict() { return !this.#busy; }
-  snapshot() { return { projectId: this.#projectId, xConfigured: !!(this.#x.clientId && this.#x.redirectUri), publishingEnabled: this.#publish,
+  #xApp() { return { ...(this.#store.data.xApp || this.#x), redirectUri: this.#x.redirectUri }; }
+  #xBinding() { const app = this.#xApp(); return digest({ mode: this.#store.data.xApp ? 'custom' : 'platform', clientId: app.clientId || null, clientSecret: app.clientSecret || null, redirectUri: app.redirectUri || null }); }
+  #publicXApp() { return { mode: this.#store.data.xApp ? 'custom' : 'platform', callbackUri: this.#x.redirectUri || null, platformAvailable: !!(this.#x.clientId && this.#x.redirectUri) }; }
+  snapshot() { const app = this.#xApp(); return { projectId: this.#projectId, xConfigured: !!(app.clientId && app.redirectUri), xApp: this.#publicXApp(), publishingEnabled: this.#publish,
     accounts: Object.fromEntries(Object.entries(this.#store.data.accounts).map(([channel, account]) => [channel, publicAccount(account)])), outbox: this.#store.data.outbox.map(item => this.#publicIntent(item)) }; }
   #publicIntent(item) { return { id: item.id, channel: item.channel, status: item.status, preview: structuredClone(item.preview), approvalDigest: item.approvalDigest, createdAt: item.createdAt, expiresAt: item.expiresAt, ...(item.result ? { result: structuredClone(item.result) } : {}), ...(item.error ? { error: item.error } : {}) }; }
   async #request(url, { headers = {}, method = 'GET', body, form = false } = {}) {
@@ -65,19 +71,39 @@ export class SocialService {
       return JSON.parse(Buffer.concat(chunks).toString('utf8'));
     } catch (error) { if (error instanceof Problem) throw error; throw new Problem('Social provider response could not be confirmed. Inspect the saved operation; no automatic retry was sent.', 502); }
   }
-  #xHeaders() { return this.#x.clientSecret ? { Authorization: 'Basic ' + Buffer.from(encodeURIComponent(this.#x.clientId) + ':' + encodeURIComponent(this.#x.clientSecret)).toString('base64') } : {}; }
+  #xHeaders(app) { return app.clientSecret ? { Authorization: 'Basic ' + Buffer.from(encodeURIComponent(app.clientId) + ':' + encodeURIComponent(app.clientSecret)).toString('base64') } : {}; }
+  #invalidateX() {
+    const s = this.#store.data;
+    for (const item of s.oauth) { if (item.status === 'pending') item.status = 'cancelled'; delete item.verifier; }
+    for (const item of s.outbox) if (item.channel === 'x' && item.status === 'draft') item.status = 'cancelled';
+  }
+  configureXApp(input = {}) {
+    return this.#exclusive(() => {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['mode', 'clientId', 'clientSecret'].includes(key)) || !['custom', 'platform'].includes(input.mode)) throw new Problem('Choose your own X app or the Veyl app. The callback is fixed by Veyl.');
+      if (this.#store.data.accounts.x) throw new Problem('Disconnect this agent’s X account before changing its app. Unsent X drafts will be cancelled.', 409);
+      if (input.mode === 'custom') {
+        if (!this.#x.redirectUri) throw new Problem('The fixed X callback is not configured by the server.', 503);
+        if (!appCredential(input.clientId, 512) || !appCredential(input.clientSecret ?? '', 4096, true)) throw new Problem('Enter a valid OAuth 2.0 client ID and, for a confidential app, its client secret.');
+      } else if (Object.hasOwn(input, 'clientId') || Object.hasOwn(input, 'clientSecret')) throw new Problem('Removing the custom app does not accept credentials.');
+      this.#invalidateX();
+      this.#store.data.xApp = input.mode === 'custom' ? { clientId: input.clientId, clientSecret: input.clientSecret || '' } : null;
+      this.#save(); const app = this.#xApp();
+      return { xApp: this.#publicXApp(), xConfigured: !!(app.clientId && app.redirectUri) };
+    });
+  }
   #tokens(raw) {
     if (!raw || raw.token_type?.toLowerCase() !== 'bearer' || !Number.isSafeInteger(raw.expires_in) || raw.expires_in <= 0 || raw.expires_in > 31_536_000 || typeof raw.scope !== 'string' || !SCOPES.every(scope => raw.scope.split(' ').includes(scope))) throw new Problem('X did not grant the required posting and refresh permissions.', 502);
     return { accessToken: clean(raw.access_token, 8192), refreshToken: clean(raw.refresh_token, 8192), expiresAt: this.#now() + raw.expires_in * 1000 };
   }
   beginX() {
     return this.#exclusive(() => {
-      if (!this.#x.clientId || !this.#x.redirectUri) throw new Problem('Configure the X developer app client ID and callback URL first.', 503);
+      const app = this.#xApp();
+      if (!app.clientId || !app.redirectUri) throw new Problem('Configure an X developer app for this agent first.', 503);
       const s = this.#store.data; s.oauth = s.oauth.filter(item => item.expiresAt > this.#now()).slice(-20);
       const state = this.#projectId + '.' + secret(), verifier = secret(), expiresAt = this.#now() + 600_000;
-      s.oauth.push({ state, verifier, expiresAt, status: 'pending' }); this.#save();
+      s.oauth.push({ state, verifier, expiresAt, status: 'pending', appBinding: this.#xBinding() }); this.#save();
       const url = new URL('https://x.com/i/oauth2/authorize');
-      url.search = new URLSearchParams({ response_type: 'code', client_id: this.#x.clientId, redirect_uri: this.#x.redirectUri, scope: SCOPES.join(' '), state, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' }).toString();
+      url.search = new URLSearchParams({ response_type: 'code', client_id: app.clientId, redirect_uri: app.redirectUri, scope: SCOPES.join(' '), state, code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256' }).toString();
       return { authorizationUrl: url.href, state, expiresAt };
     });
   }
@@ -85,22 +111,25 @@ export class SocialService {
     return this.#exclusive(async () => {
       if (typeof code !== 'string' || !code || code.length > 4096 || typeof state !== 'string') throw new Problem('Missing X callback parameters.');
       const intent = this.#store.data.oauth.find(item => equivalent(item.state, state));
-      if (!intent || intent.expiresAt <= this.#now() || intent.status !== 'pending') throw new Problem('X authorization is expired, used or belongs to another project. Start a new connection.', 409);
+      if (!intent || intent.expiresAt <= this.#now() || intent.status !== 'pending' || !equivalent(intent.appBinding, this.#xBinding())) throw new Problem('X authorization is expired, used or belongs to another project or app. Start a new connection.', 409);
+      const app = this.#xApp();
       intent.status = 'exchanging'; this.#save();
       try {
-        const tokens = this.#tokens(await this.#request('https://api.x.com/2/oauth2/token', { method: 'POST', form: true, headers: this.#xHeaders(), body: { grant_type: 'authorization_code', client_id: this.#x.clientId, code, redirect_uri: this.#x.redirectUri, code_verifier: intent.verifier } }));
+        const tokens = this.#tokens(await this.#request('https://api.x.com/2/oauth2/token', { method: 'POST', form: true, headers: this.#xHeaders(app), body: { grant_type: 'authorization_code', client_id: app.clientId, code, redirect_uri: app.redirectUri, code_verifier: intent.verifier } }));
         const me = await this.#request('https://api.x.com/2/users/me', { headers: { Authorization: 'Bearer ' + tokens.accessToken } });
-        const account = { channel: 'x', connectionId: randomUUID(), id: id(me.data?.id), username: clean(me.data?.username, 50), connectedAt: this.#now(), status: 'connected', ...tokens };
+        const account = { channel: 'x', connectionId: randomUUID(), id: id(me.data?.id), username: clean(me.data?.username, 50), connectedAt: this.#now(), status: 'connected', appBinding: intent.appBinding, ...tokens };
         this.#store.data.accounts.x = account; intent.status = 'complete'; delete intent.verifier; this.#save(); return publicAccount(account);
       } catch (error) { intent.status = 'unknown'; delete intent.verifier; if (this.#store.healthy) this.#save(); throw error; }
     });
   }
   async #xToken(account) {
+    if (!equivalent(account.appBinding, this.#xBinding())) { account.status = 'reconnect_required'; this.#save(); throw new Problem('The X app changed. Reconnect this account before publishing.', 409); }
     if (account.status !== 'connected') throw new Problem('Reconnect the X account before publishing.', 409);
     if (account.expiresAt > this.#now() + 60_000) return account.accessToken;
     account.status = 'refreshing'; this.#save();
     try {
-      const tokens = this.#tokens(await this.#request('https://api.x.com/2/oauth2/token', { method: 'POST', form: true, headers: this.#xHeaders(), body: { grant_type: 'refresh_token', client_id: this.#x.clientId, refresh_token: account.refreshToken } }));
+      const app = this.#xApp();
+      const tokens = this.#tokens(await this.#request('https://api.x.com/2/oauth2/token', { method: 'POST', form: true, headers: this.#xHeaders(app), body: { grant_type: 'refresh_token', client_id: app.clientId, refresh_token: account.refreshToken } }));
       Object.assign(account, tokens, { status: 'connected' }); this.#save(); return account.accessToken;
     } catch (error) { account.status = 'reconnect_required'; if (this.#store.healthy) this.#save(); throw error; }
   }
@@ -129,6 +158,7 @@ export class SocialService {
     return this.#exclusive(() => {
       if (!CHANNELS.has(channel)) throw new Problem('Unknown social channel.');
       this.#store.data.accounts[channel] = null;
+      if (channel === 'x') this.#invalidateX();
       for (const item of this.#store.data.outbox) if (item.channel === channel && item.status === 'draft') item.status = 'cancelled';
       this.#save(); return { disconnected: true, providerRevocation: 'Revoke app access in the provider settings if you also want to invalidate its issued credentials.' };
     });

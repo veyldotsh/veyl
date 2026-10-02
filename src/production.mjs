@@ -472,7 +472,7 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
           if (req.method === 'GET' && parts.length === 4) return json(200, social.snapshot());
           if (req.method === 'POST' && parts.length === 5) {
             kit.store.assertHealthy();
-            const method = { 'x-begin': 'beginX', 'x-complete': 'completeX', telegram: 'connectTelegram', disconnect: 'disconnect', draft: 'draft', publish: 'publish', cancel: 'cancel' }[parts[4]];
+            const method = { 'x-app': 'configureXApp', 'x-begin': 'beginX', 'x-complete': 'completeX', telegram: 'connectTelegram', disconnect: 'disconnect', draft: 'draft', publish: 'publish', cancel: 'cancel' }[parts[4]];
             if (!method) throw new Problem('Not found.', 404);
             if (parts[4] === 'draft') registry.resources.assertCapacity();
             return json(200, await social[method](body));

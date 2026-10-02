@@ -97,3 +97,43 @@ test('the real static server serves Connections assets with same-origin policy',
     const content = await response.text(); assert.ok(content.length > 100); if (path === '/app') assert.match(content, /href="\/social-panel\.css"/);
   }
 });
+
+test('custom X app fields clear before submission and credential-bearing failures cannot reach the page', async () => {
+  const snapshot = fixture(); snapshot.accounts.x = null; snapshot.xConfigured = false;
+  snapshot.xApp = { mode: 'platform', callbackUri: 'https://veyl.sh/oauth/x', platformAvailable: false };
+  const element = new Element(); let rejectRequest, payload, captured;
+  const panel = mountSocialPanel(element, { project, hosted: true, api: async (path, body) => {
+    if (path.endsWith('/x-app')) { payload = body; captured = structuredClone(body); return new Promise((resolve, reject) => { rejectRequest = reject; }); }
+    return snapshot;
+  } }); await panel.ready;
+  assert.match(element.innerHTML, /data-social-form="x-app"/); assert.match(element.innerHTML, /https:\/\/veyl.sh\/oauth\/x/);
+  assert.match(element.innerHTML, /type="password" name="clientSecret"/); assert.doesNotMatch(element.innerHTML, /name="redirectUri"/);
+  const target = form('x-app', { clientId: 'offline-app-id', clientSecret: 'offline-app-secret' }); element.fire('submit', target);
+  assert.equal(target.elements.clientId.value, ''); assert.equal(target.elements.clientSecret.value, '');
+  assert.deepEqual(captured, { mode: 'custom', clientId: 'offline-app-id', clientSecret: 'offline-app-secret' });
+  rejectRequest(new Error('offline-app-secret')); await settled(panel);
+  assert.equal(payload.clientId, ''); assert.equal(payload.clientSecret, '');
+  assert.doesNotMatch(element.innerHTML, /offline-app-id|offline-app-secret/); assert.match(element.innerHTML, /settings could not be confirmed/);
+  panel.destroy();
+});
+
+test('connected X accounts must disconnect before app edits and removing an app restores platform mode', async () => {
+  const snapshot = fixture(); snapshot.xApp = { mode: 'custom', callbackUri: 'https://veyl.sh/oauth/x', platformAvailable: true };
+  const element = new Element(), posts = [];
+  const panel = mountSocialPanel(element, { project, hosted: true, api: async (path, body) => { if (body) { posts.push({ path, body: structuredClone(body) }); snapshot.xApp.mode = 'platform'; } return snapshot; } }); await panel.ready;
+  assert.match(element.innerHTML, /Disconnect this agent/); assert.doesNotMatch(element.innerHTML, /data-social-form="x-app"/);
+  element.fire('submit', form('x-app', { clientId: 'offline-app', clientSecret: '' })); await settled(panel); assert.equal(posts.length, 0);
+  element.fire('click', control('x-app-platform')); await settled(panel); assert.equal(posts.length, 0);
+  snapshot.accounts.x = null; await panel.refresh();
+  element.fire('click', control('x-app-platform')); await settled(panel);
+  assert.deepEqual(posts, [{ path: `/api/projects/${project.id}/social/x-app`, body: { mode: 'platform' } }]);
+  panel.destroy();
+});
+
+test('X app snapshots reject credential fields and mutable or credential-bearing callback URLs', () => {
+  for (const xApp of [
+    { mode: 'custom', callbackUri: 'https://veyl.sh/oauth/x', platformAvailable: true, clientSecret: 'not-public' },
+    { mode: 'custom', callbackUri: 'https://user:pass@veyl.sh/oauth/x', platformAvailable: true },
+    { mode: 'custom', callbackUri: 'https://veyl.sh/oauth/x?redirect=other', platformAvailable: true }
+  ]) assert.throws(() => checkedSocialSnapshot({ ...fixture(), xApp }, project.id));
+});

@@ -26,6 +26,7 @@ const LIMIT = { buy: 4295128740n, sell: 1461446703485210103287273052203988822378
 const BIG_FIELDS = ['dailyLimit', 'treasuryEth', 'sqrtPriceX96', 'liquidity', 'maxToken', 'maxQuote', 'minToken', 'minQuote', 'deadline'];
 const serialize = v => JSON.parse(JSON.stringify(v, (_, x) => typeof x === 'bigint' ? x.toString() : x));
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+const validPublicAddress = value => typeof value === 'string' && isAddress(value) && !equal(value, zeroAddress);
 const nativeQuote = market => market.quoteKind !== 'veyl' && (!market.quoteAsset || equal(market.quoteAsset, zeroAddress));
 const swapLimit = (market, side) => LIMIT[(side === 'buy') !== (market.tokenIsCurrency0 === true) ? 'buy' : 'sell'];
 const sqrt = n => { if (n < 2n) return n; let x = n, y = (x + 1n) / 2n; while (y < x) { x = y; y = (x + n / x) / 2n; } return x; };
@@ -106,17 +107,39 @@ export class MainnetMarkets {
   }
   quotePolicy(project) {
     const agent = this.config.agentMarkets !== undefined && !this.protectedPreset(project);
-    return { quoteKind: agent ? 'veyl' : 'native', quoteAsset: agent ? this.config.agentMarkets.quoteAsset : zeroAddress,
+    const policy = agent ? this.config.agentMarkets || {} : {}, shared = agent && policy.sharedInfrastructure === true;
+    return { quoteKind: agent ? 'veyl' : 'native', quoteAsset: agent ? policy.quoteAsset || null : zeroAddress,
       quoteSymbol: agent ? 'VEYL' : 'ETH', quoteDecimals: 18,
-      conversionSwapRouter: agent ? this.config.agentMarkets.conversionSwapRouter : zeroAddress,
-      mainMarketFactory: agent ? this.config.agentMarkets.mainMarketFactory : null,
-      factory: project?.mainnetInfrastructure?.factory || (agent ? this.config.agentMarkets.marketFactory : this.config.deployments?.marketFactory) || null };
+      conversionSwapRouter: agent ? policy.conversionSwapRouter || null : zeroAddress,
+      mainMarketFactory: agent ? policy.mainMarketFactory || null : null,
+      infrastructureMode: shared ? 'shared' : 'per-project',
+      factory: (shared ? policy.marketFactory : project?.mainnetInfrastructure?.factory || (agent ? policy.marketFactory : this.config.deployments?.marketFactory)) || null };
+  }
+  configurationReadiness(project, quote = this.quotePolicy(project)) {
+    const shared = quote.infrastructureMode === 'shared', configured = validPublicAddress(quote.factory);
+    const invalidFactory = Boolean(quote.factory) && !configured;
+    const mainUnavailable = quote.quoteKind === 'veyl' && ![quote.quoteAsset, quote.conversionSwapRouter, quote.mainMarketFactory].every(validPublicAddress);
+    const savedFactory = project?.mainnetInfrastructure?.factory;
+    const sharedMismatch = shared && configured && savedFactory && !equal(savedFactory, quote.factory);
+    const missing = [];
+    if (mainUnavailable) missing.push('Agent launches require the reviewed main VEYL/ETH market to be deployed and configured.');
+    if (sharedMismatch) missing.push('This workspace references different infrastructure from the configured shared agent factory.');
+    else if (invalidFactory) missing.push('The configured market factory address is invalid.');
+    else if (!configured) missing.push(shared ? 'Agent launches are unavailable until the shared market infrastructure is configured.' : 'Deploy and verify the market infrastructure before launching.');
+    return {
+      configured, missing,
+      canPrepareInfrastructure: !shared && !configured && !mainUnavailable && !invalidFactory,
+      canPrepareLaunch: configured && !mainUnavailable && !sharedMismatch,
+      // This is configuration readiness. Runtime and relationship checks remain
+      // mandatory in infrastructure() before any launch intent can be prepared.
+      readiness: { status: mainUnavailable ? 'main-market-unavailable' : !configured || sharedMismatch ? 'infrastructure-unavailable' : 'ready', message: missing[0] || null }
+    };
   }
   capabilities(project) {
-    const quote = this.quotePolicy(project), { factory } = quote;
-    return { ...quote, infrastructureStep: (INFRA_STAGES.findIndex(stage => !project?.mainnetInfrastructure?.[stage.field]) + 1) || 5, infrastructureSteps: 5, chainId: 1, configured: Boolean(factory), quoter: project?.mainnetInfrastructure?.quoter || null, poolManager: ETHEREUM_POOL_MANAGER,
+    const quote = this.quotePolicy(project);
+    return { ...quote, ...this.configurationReadiness(project, quote), infrastructureStep: (INFRA_STAGES.findIndex(stage => !project?.mainnetInfrastructure?.[stage.field]) + 1) || 5, infrastructureSteps: 5, chainId: 1, quoter: project?.mainnetInfrastructure?.quoter || null, poolManager: ETHEREUM_POOL_MANAGER,
       protocol: this.config.addresses?.protocolRecipient || null, walletTransactions: 'unsigned', broadcasting: false,
-      confirmations: this.confirmations, missing: [ ...(!factory ? ['Deploy and verify the market infrastructure before launching.'] : []), ...(quote.quoteKind === 'veyl' && (!quote.quoteAsset || !quote.conversionSwapRouter || !quote.mainMarketFactory) ? ['The reviewed main VEYL/ETH market must be deployed and pinned before agent/VEYL markets can launch.'] : []) ],
+      confirmations: this.confirmations,
       feeBps: { buy: this.config.trading?.buyFeeBps ?? 180, sell: this.config.trading?.sellFeeBps ?? 180 }, lpFeePips: 0,
       tickSpacing: quote.quoteKind === 'veyl' ? this.config.agentMarkets?.tickSpacing ?? 200 : this.config.trading?.tickSpacing ?? 200, tokenSupply: '1000000000', liquidityCustody: this.mainPosition(project) ? 'deployer-position-nft' : 'permanently-locked',
       ...(this.mainPosition(project) ? { mainTokenLaunch: this.config.mainTokenLaunch } : {}),
@@ -193,6 +216,8 @@ export class MainnetMarkets {
   async validateQuoteAsset(project) {
     const quote = this.quotePolicy(project);
     if (quote.quoteKind === 'native') return { ...quote, conversionHook: null };
+    const readiness = this.configurationReadiness(project, quote).readiness;
+    if (readiness.status === 'main-market-unavailable') throw new Problem(readiness.message, 409);
     const token = nonzero(quote.quoteAsset, 'reviewed main VEYL token'), router = nonzero(quote.conversionSwapRouter, 'reviewed main VEYL/ETH router'), factory = nonzero(quote.mainMarketFactory, 'reviewed main VEYL factory');
     await Promise.all([[token, 'AgentToken'], [router, 'VeylSwapRouter'], [factory, 'VeylMarketFactory']].map(([a, name]) => this.identity(a, name)));
     const [hook, routerToken, routerQuote, routerManager, tokenFactory, factoryQuote, factoryConversion, factoryManager, protocol, protection, activated] = await Promise.all([
@@ -211,6 +236,8 @@ export class MainnetMarkets {
     return { ...quote, conversionHook: hook };
   }
   async infrastructure(project) {
+    const policy = this.capabilities(project);
+    if (!policy.canPrepareLaunch) throw new Problem(policy.readiness.message, 409);
     await this.checkChain(); const quote = await this.validateQuoteAsset(project);
     const factory = nonzero(quote.factory, 'deployed factory');
     await this.identity(factory, 'VeylMarketFactory');
@@ -246,6 +273,9 @@ export class MainnetMarkets {
     return intent;
   }
   async prepareFactory(project, input, checkpoint) {
+    const policy = this.capabilities(project);
+    if (policy.infrastructureMode === 'shared') throw new Problem('Agent markets use shared infrastructure managed by Veyl. Customers do not deploy the platform factory.', 409);
+    if (policy.readiness.status === 'main-market-unavailable' || (!policy.canPrepareInfrastructure && !policy.configured)) throw new Problem(policy.readiness.message, 409);
     await this.checkChain(); const quote = await this.validateQuoteAsset(project);
     const account = nonzero(input.account, 'connected wallet'), protocol = nonzero(this.config.addresses?.protocolRecipient, 'platform treasury');
     if (this.mainPosition(project) && !equal(account, this.config.addresses?.deployer)) throw new Problem('Only the configured main-token deployer can prepare this infrastructure.', 403);

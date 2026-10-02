@@ -20,11 +20,12 @@
     "initialLiquidityTokens": "980000000"
   },
   "agentMarkets": {
-    "mainMarketFactory": null,
-    "quoteAsset": null,
-    "conversionSwapRouter": null,
-    "marketFactory": null,
-    "tickSpacing": 200
+    "mainMarketFactory": "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+    "quoteAsset": "0x2eaB833d244352D4A7f8dC93285B1776F01954cB",
+    "conversionSwapRouter": "0xA847BE733c61a994a4D565DE41fE07528Be3cc68",
+    "marketFactory": "0xFA3b25E3Aa962DC08439E4Fb4c0D65c0EBcD702E",
+    "tickSpacing": 200,
+    "sharedInfrastructure": true
   },
   "trading": {
     "buyFeeBps": 180,
@@ -37,7 +38,7 @@
     "liquidityCustody": "deployer-position-nft"
   },
   "zkapi": {
-    "daemonHostPlan": "Installed prelaunch shared-VPS pilot: one running job and daemon pair, fifty saved profiles, two CPU cores and 4 GiB aggregate memory cap with no swap. The authenticated gateway is connected; funded execution and mainnet writes remain disabled. Move to a separate server before growing production workloads.",
+    "daemonHostPlan": "Shared-host pilot: one running job and daemon pair, fifty saved profiles, two CPU cores and 4 GiB aggregate memory cap with no swap. The authenticated gateway supports wallet-approved mainnet transactions, per-project funding approvals and owner-approved social publishing. Automatic maintenance operators require separate configuration. Move to a separate server before growing production workloads.",
     "maxPrepaidEth": null,
     "reconciliationPolicy": "Reserve each live model catalog cap plus a bounded 1000 microUSD rounding allowance before dispatch. Reconcile exact ETH charges only from authenticated durable native receipts bound to the saved call, session, journal and original quote; release unused budget once. Unknown or legacy calls stay held and inference is never automatically replayed. Real funded acceptance was deliberately not run."
   },

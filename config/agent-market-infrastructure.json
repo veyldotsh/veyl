@@ -1,0 +1,53 @@
+{
+  "chainId": 1,
+  "factory": "0xFA3b25E3Aa962DC08439E4Fb4c0D65c0EBcD702E",
+  "agentMarkets": {
+    "mainMarketFactory": "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+    "quoteAsset": "0x2eaB833d244352D4A7f8dC93285B1776F01954cB",
+    "conversionSwapRouter": "0xA847BE733c61a994a4D565DE41fE07528Be3cc68",
+    "marketFactory": "0xFA3b25E3Aa962DC08439E4Fb4c0D65c0EBcD702E",
+    "tickSpacing": 200,
+    "sharedInfrastructure": true
+  },
+  "transactions": [
+    {
+      "contract": "VeylLiquidityBuilder",
+      "address": "0x5c80f9f04b743ab38a15bd742b035a12574f4d04",
+      "transactionHash": "0xe45abb487be1e5e60e53b6dc232c3796721f81c29474b869350bae2bac04e0bc",
+      "blockNumber": "26101914"
+    },
+    {
+      "contract": "VeylMarketFactory",
+      "address": "0xfa3b25e3aa962dc08439e4fb4c0d65c0ebcd702e",
+      "transactionHash": "0xcf41391f477ea7e2704c0bfcda283c55c7687b9b56405cc9f87e504b68fc9e71",
+      "blockNumber": "26101916"
+    }
+  ],
+  "contracts": [
+    {
+      "contract": "VeylLiquidityBuilder",
+      "address": "0x5C80f9f04b743ab38A15bD742B035A12574f4D04",
+      "runtimeCodeHash": "0xff90ee8d7c77f60853b7b59eff44c1960324a51e1a12682accc8baa161889038"
+    },
+    {
+      "contract": "VeylMarketFactory",
+      "address": "0xFA3b25E3Aa962DC08439E4Fb4c0D65c0EBcD702E",
+      "runtimeCodeHash": "0x47d67cde4406840e6a9bed276c42edbf933ff91080a783835052e8c18ecb3c97"
+    },
+    {
+      "contract": "VeylProjectDeployer",
+      "address": "0x1dA6e8A89B9A58722996E8cFC9cCea9916edD52d",
+      "runtimeCodeHash": "0xe29f15cde1fcb04303cd47e736986aab4f66792d5e7183f925251ffa10d98840"
+    },
+    {
+      "contract": "VeylMarketDeployer",
+      "address": "0x1e7785F0BF76bee36c163B65b607E50730F1d9F1",
+      "runtimeCodeHash": "0xe1998712f3d0fc465a6906a1b836bacbc1d75994d49325f4c3d326ccf6985cc1"
+    },
+    {
+      "contract": "VeylLiquidityDeployer",
+      "address": "0x2CD529Eacf1153A892dA7fe4f62f592299ef2F84",
+      "runtimeCodeHash": "0x71ace49b58297aebf0050e84d2350d1369055ac5fe17837cd0653e3bb52275c3"
+    }
+  ]
+}

@@ -12,7 +12,7 @@ export function workerEnvironment(env = process.env) { const { base } = installa
   VEYL_ACTIVE_JOBS: '1', VEYL_MAX_QUEUED_JOBS: '100', VEYL_MAX_QUEUED_PER_OWNER: '10', VEYL_MAX_DATA_BYTES: '2147483648', VEYL_MIN_FREE_BYTES: '536870912',
   VEYL_DAEMON_FIRST_PORT: '19000', VEYL_ZKAPI_CLIENTD: base + '/bin/zkapi-clientd-control', VEYL_ZKAPI_MANIFEST: base + '/bin/runtime-manifest.json',
   VEYL_ZKAPI_WALLETD: base + '/vendor/runtime/bin/zkapi-walletd', VEYL_ZKAPI_PROOF_SETUP: base + '/vendor/runtime/lib/zkapi-clientd/current/share/zkapi-clientd/proof-setup',
-  VEYL_ENABLE_MAINNET_TRANSACTIONS: 'false', VEYL_ENABLE_SOCIAL_PUBLISHING: 'false', VEYL_FEE_KEEPER_ENABLED: 'false'
+  VEYL_ENABLE_MAINNET_TRANSACTIONS: 'false', VEYL_ENABLE_ZKAPI_APPROVAL: 'false', VEYL_ENABLE_SOCIAL_PUBLISHING: 'false', VEYL_FEE_KEEPER_ENABLED: 'false'
 }; }
 const secrets = ['VEYL_STATE_KEY', 'VEYL_GATEWAY_KEY', 'VEYL_BACKUP_KEY'];
 export function validateWorkerEnvironment(raw, env = process.env) {
@@ -21,13 +21,18 @@ export function validateWorkerEnvironment(raw, env = process.env) {
   for (const line of raw.split('\n').filter(Boolean)) {
     const match = /^([A-Z][A-Z0-9_]*)=([^\r\n]*)$/.exec(line); if (!match || Object.hasOwn(data, match[1])) throw new Error('Invalid or duplicate worker environment field.'); data[match[1]] = match[2];
   }
-  if (Object.keys(data).length !== Object.keys(expected).length + secrets.length) throw new Error('Existing worker environment has unexpected fields; review it without printing secrets.');
+  const allowed = new Set([...Object.keys(expected), ...secrets]);
+  if (Object.keys(data).some(name => !allowed.has(name))) throw new Error('Existing worker environment has unexpected fields; review it without printing secrets.');
   for (const [name, value] of Object.entries(expected)) {
-    // An existing installation may explicitly enable wallet-approved mainnet
-    // actions. Generation stays disabled; autonomous spending flags stay strict.
-    const valid = name === 'VEYL_ENABLE_MAINNET_TRANSACTIONS' ? ['true', 'false'].includes(data[name]) : data[name] === value;
+    // Older installations omit zkAPI approval, which is equivalent to disabled.
+    if (name === 'VEYL_ENABLE_ZKAPI_APPROVAL' && !Object.hasOwn(data, name)) continue;
+    // Activation enables only the existing per-user approval paths. Automated
+    // operators and resource settings require their own separately reviewed setup.
+    const approvalFlag = ['VEYL_ENABLE_MAINNET_TRANSACTIONS', 'VEYL_ENABLE_ZKAPI_APPROVAL', 'VEYL_ENABLE_SOCIAL_PUBLISHING'].includes(name);
+    const valid = approvalFlag ? ['true', 'false'].includes(data[name]) : data[name] === value;
     if (!valid) throw new Error('Existing worker environment differs from the approved isolated preset.');
   }
+  if (data.VEYL_ENABLE_ZKAPI_APPROVAL === 'true' && data.VEYL_ENABLE_MAINNET_TRANSACTIONS !== 'true') throw new Error('zkAPI approvals require mainnet wallet transactions to be enabled.');
   if (secrets.some(name => !/^[0-9a-f]{64}$/.test(data[name])) || new Set(secrets.map(name => data[name])).size !== secrets.length) throw new Error('Worker secret format or independence is invalid.');
   return true;
 }

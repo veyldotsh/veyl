@@ -72,6 +72,13 @@ test('public config enforces fee, amount, address and price boundaries', () => {
   assert.equal(validateConfig(value).invalid.length, 7);
 });
 
+test('shared infrastructure mode is explicit and must be a boolean', () => {
+  const value = config(); value.agentMarkets.sharedInfrastructure = true;
+  assert.ok(!validateConfig(value).invalid.includes('agentMarkets.sharedInfrastructure'));
+  value.agentMarkets.sharedInfrastructure = 'true';
+  assert.ok(validateConfig(value).invalid.includes('agentMarkets.sharedInfrastructure'));
+});
+
 test('offline preflight never calls network verification and cannot authorize deployment', async () => {
   const report = await preflight(config(), { offline: true, verify: () => { throw new Error('network called'); }, artifacts: async () => [] });
   assert.equal(report.mode, 'read-only-no-signing');

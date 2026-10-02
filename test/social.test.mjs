@@ -121,3 +121,81 @@ test('X draft validation follows official URL, NFC and combined-emoji weights wi
   for (const [index, text] of denied.entries()) await assert.rejects(f.service.draft({ channel: 'x', text, idempotencyKey: 'denied-text-' + index }), /280 weighted|Choose/);
   assert.equal(f.calls.some(call => call.url.pathname === '/2/tweets'), false);
 });
+
+test('custom X app credentials persist encrypted and drive bound OAuth and refresh without public disclosure', async t => {
+  const f = fixture(t), clientId = 'offline-custom-app', clientSecret = 'offline-custom-secret';
+  const result = await f.service.configureXApp({ mode: 'custom', clientId, clientSecret });
+  assert.deepEqual(result, { xApp: { mode: 'custom', callbackUri: 'https://veyl.sh/oauth/x', platformAvailable: true }, xConfigured: true });
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.state().xApp, { clientId, clientSecret });
+  for (const value of [clientId, clientSecret]) { assert.equal(readFileSync(f.file, 'utf8').includes(value), false); assert.equal(JSON.stringify([result, f.service.snapshot()]).includes(value), false); }
+  f.service = f.restart(); const begun = await f.service.beginX(), url = new URL(begun.authorizationUrl);
+  assert.equal(url.searchParams.get('client_id'), clientId); assert.equal(url.searchParams.get('redirect_uri'), 'https://veyl.sh/oauth/x');
+  await f.service.completeX({ state: begun.state, code: 'offline-custom-code' });
+  const authorization = 'Basic ' + Buffer.from(clientId + ':' + clientSecret).toString('base64');
+  assert.equal(f.calls[0].headers.Authorization, authorization); assert.equal(f.calls[0].body.client_id, clientId);
+  const item = await draft(f.service); f.setClock(TIME + 7_200_000); f.service = f.restart();
+  await f.service.publish(approve(item));
+  const refresh = f.calls.find(call => call.body?.grant_type === 'refresh_token'); assert.equal(refresh.headers.Authorization, authorization); assert.equal(refresh.body.client_id, clientId);
+  assert.equal(JSON.stringify(f.service.snapshot()).includes(clientSecret), false);
+});
+
+test('public X apps omit Basic authorization and removing a custom app restores platform fallback', async t => {
+  const f = fixture(t); await f.service.configureXApp({ mode: 'custom', clientId: 'offline-public-app' });
+  await connectX(f); assert.equal(f.calls[0].headers.Authorization, undefined); assert.equal(f.calls[0].body.client_id, 'offline-public-app');
+  await f.service.disconnect({ channel: 'x' }); await f.service.configureXApp({ mode: 'platform' });
+  assert.equal(f.state().xApp, null); assert.equal(f.service.snapshot().xApp.mode, 'platform');
+  const begun = await f.service.beginX(); assert.equal(new URL(begun.authorizationUrl).searchParams.get('client_id'), 'fixture-client');
+});
+
+test('app changes require explicit disconnect and invalidate old drafts and pending callbacks', async t => {
+  const f = fixture(t); await connectX(f); const item = await draft(f.service), begun = await f.service.beginX();
+  await assert.rejects(f.service.configureXApp({ mode: 'custom', clientId: 'offline-new-app' }), /Disconnect/);
+  assert.equal(f.service.snapshot().accounts.x.status, 'connected'); assert.equal(f.service.snapshot().outbox[0].status, 'draft');
+  await f.service.disconnect({ channel: 'x' }); const before = f.calls.length;
+  await f.service.configureXApp({ mode: 'custom', clientId: 'offline-new-app' });
+  await assert.rejects(f.service.completeX({ state: begun.state, code: 'old-code' }), /expired|used/);
+  assert.equal((await f.service.publish(approve(item))).status, 'cancelled');
+  assert.equal(f.calls.length, before); assert.equal(f.state().oauth.some(entry => entry.verifier), false);
+});
+
+test('a changed platform app cannot exchange a pending code or refresh an existing account', async t => {
+  const f = fixture(t); await connectX(f); const item = await draft(f.service), begun = await f.service.beginX(), before = f.calls.length;
+  f.config.x.clientSecret = 'offline-rotated-platform-secret'; f.service = f.restart();
+  assert.equal(f.service.snapshot().accounts.x.status, 'reconnect_required');
+  await assert.rejects(f.service.completeX({ state: begun.state, code: 'old-code' }), /another project or app/);
+  await assert.rejects(f.service.publish(approve(item)), /app changed|Reconnect/);
+  assert.equal(f.calls.length, before);
+});
+
+test('custom apps stay project-scoped and invalid credential or callback payloads never echo values', async t => {
+  const f = fixture(t), other = fixture(t, { projectId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' });
+  await f.service.configureXApp({ mode: 'custom', clientId: 'offline-private-app', clientSecret: 'offline-private-secret' });
+  assert.equal(other.service.snapshot().xApp.mode, 'platform');
+  const begun = await f.service.beginX(); await assert.rejects(other.service.completeX({ state: begun.state, code: 'offline-code' }), /another project/);
+  for (const input of [{ mode: 'custom', clientId: 'invalid\ncredential', clientSecret: 'must-not-echo' }, { mode: 'custom', clientId: 'offline-app', redirectUri: 'https://not-the-callback.example' }, { mode: 'platform', clientSecret: 'must-not-echo' }]) {
+    await assert.rejects(f.service.configureXApp(input), error => error.status === 400 && !error.message.includes('must-not-echo') && !error.message.includes('not-the-callback.example') && !error.message.includes('invalid\ncredential'));
+  }
+  assert.equal(f.state().xApp.clientId, 'offline-private-app');
+  assert.equal(f.calls.length + other.calls.length, 0);
+});
+
+test('custom app save works without a platform app and provider failures redact its credentials', async t => {
+  const f = fixture(t, { x: { redirectUri: 'https://veyl.sh/oauth/x' } });
+  assert.equal(f.service.snapshot().xConfigured, false);
+  await f.service.configureXApp({ mode: 'custom', clientId: 'offline-only-custom', clientSecret: 'offline-only-secret' });
+  assert.equal(f.service.snapshot().xConfigured, true); assert.equal(f.service.snapshot().xApp.platformAvailable, false);
+  const begun = await f.service.beginX(); f.intercept(() => { throw new Error('offline-only-secret'); });
+  await assert.rejects(f.service.completeX({ state: begun.state, code: 'offline-code' }), error => !error.message.includes('offline-only-secret'));
+  assert.equal(JSON.stringify(f.service.snapshot()).includes('offline-only-secret'), false);
+});
+
+test('changing an X app preserves uncertain publication history without replay', async t => {
+  const f = fixture(t); await connectX(f); const item = await draft(f.service);
+  f.intercept(call => { if (call.url.pathname === '/2/tweets') throw new Error('offline lost reply'); });
+  await assert.rejects(f.service.publish(approve(item)), /may have succeeded/);
+  await f.service.disconnect({ channel: 'x' }); await f.service.configureXApp({ mode: 'custom', clientId: 'offline-next-app' });
+  const before = f.calls.length;
+  assert.equal((await f.restart().publish(approve(item))).status, 'unknown');
+  assert.equal(f.calls.length, before); assert.equal(f.service.snapshot().outbox[0].status, 'unknown');
+});

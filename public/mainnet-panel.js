@@ -20,14 +20,19 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
   let live = true, state = null, policy = capabilities, intent = null, quote = null, error = '', busy = false, launchOpen = false;
   let launchTerms = {};
   let treasuryOpen = false, treasuryDraft = { action: 'daily-limit', allowed: 'true' }, previewRevision = 0;
+  let capabilitiesReady = false, statusReady = false, refreshing = false, refreshRevision = 0;
   const walletIdentity = () => { const w = client.wallet.state(); return `${w.account?.toLowerCase() || ''}:${w.chainId ?? w.ethereum}`; };
   let walletAtPreview = walletIdentity();
   const isTreasuryOwner = () => !!state?.owner && client.wallet.state().connected && client.wallet.account?.toLowerCase() === state.owner.toLowerCase();
   const quoteSymbol = () => state?.quoteSymbol || policy.quoteSymbol || 'ETH';
   const platformMarket = () => policy.liquidityCustody === 'deployer-position-nft';
+  const platformOwner = () => platformMarket() && !!policy.mainTokenLaunch?.recipient && client.wallet.account?.toLowerCase() === policy.mainTokenLaunch.recipient.toLowerCase();
+  const canPrepareInfrastructure = () => capabilitiesReady && statusReady && policy.canPrepareInfrastructure === true && policy.infrastructureMode !== 'shared' && (!platformMarket() || platformOwner());
+  const canPrepareLaunch = () => capabilitiesReady && statusReady && policy.canPrepareLaunch === true && (!platformMarket() || platformOwner());
+  const intentAvailable = () => intent?.kind === 'launch' || intent?.purpose === 'launch-liquidity' ? canPrepareLaunch() : ['quoter', 'project-builder', 'market-builder', 'liquidity-builder', 'factory'].includes(intent?.kind) ? canPrepareInfrastructure() : true;
   const treasuryLabel = () => platformMarket() ? 'Platform operating treasury' : 'Agent treasury';
   let trade = { side: 'buy', amount: '', slippageBps: 50 };
-  client.transactionsEnabled = capabilities.transactionsEnabled === true;
+  client.transactionsEnabled = false;
   const stateChanged = () => {
     if (!live) return;
     const identity = walletIdentity();
@@ -52,9 +57,15 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
     return `<form data-mainnet-form="launch"><p class="hint">Choose every funding amount. The initial liquidity and its LP fees stay permanently locked; the remaining supply goes to your connected creator wallet.</p><div class="form-row">${field(`${quoteSymbol()} for liquidity`, 'liquidityQuote', `Amount in ${quoteSymbol()}`)}${field('Tokens for liquidity', 'liquidityTokens', 'Up to 1,000,000,000')}</div><div class="form-row">${field(`Starting tokens per ${quoteSymbol()}`, 'tokensPerQuote', 'Explicit starting price')}${field('Initial agent treasury · ETH', 'treasuryEth', '0 is allowed')}</div><div class="form-row">${field('Treasury owner', 'treasuryOwner', 'Public 0x address', 'text', wallet)}${field('Runtime operator', 'operator', 'Public 0x address')}</div><div class="form-row">${field('Daily treasury limit · ETH', 'dailyLimitEth', '0 disables operator spending')}${field('Seed tolerance · basis points', 'slippageBps', '50 = 0.5%', 'number', '50')}</div><details><summary>Liquidity range · full range by default</summary><div class="form-row">${field('Lower tick', 'tickLower', '', 'number', lower)}${field('Upper tick', 'tickUpper', '', 'number', upper)}</div><p class="hint">Ticks must align to ${space}. The chosen starting price must put both assets in the position.</p></details>${policy.launchProtection ? '<p class="hint">Launch protection: maximum 20 million tokens per transfer and per wallet for blocks B through B+9. Standard Uniswap v4 routing remains open. Caps apply to ERC-20 transfers and balances, not claims or wrapped exposure. The creator has no exemption, so at least 980 million tokens must actually enter locked liquidity. Choose and approve compatible seed amounts, price and range; no allocation is selected for you.</p>' : ''}<p class="hint">Fixed supply: 1 billion ${esc(project.symbol)}. Buy / sell fee: ${Number(policy.feeBps?.buy ?? 180) / 100}% / ${Number(policy.feeBps?.sell ?? 180) / 100}%. ETH payouts: 70% agent / 20% creator / 10% platform.${quoteSymbol() === 'VEYL' ? ' All collected VEYL fees convert to ETH first under the owner’s limits.' : ''}</p><button class="button" ${busy || !client.wallet.state().ethereum ? 'disabled' : ''}>Preview exact launch</button></form>`;
   }
   function launchState() {
-    const configured = state?.configured || policy.configured;
-    const canAdopt = platformMarket() && client.wallet.account?.toLowerCase() === policy.mainTokenLaunch?.recipient?.toLowerCase();
-    return `<section class="panel">${walletBar()}<div class="empty"><b>${platformMarket() ? 'VEYL platform token' : configured ? 'Create this agent’s market.' : 'Ethereum market setup.'}</b><p>${configured ? 'Preview the seed, token allocation and contract addresses before the wallet asks you to sign.' : (policy.quoteKind === 'veyl' ? 'Agent markets require the reviewed VEYL/ETH market and pinned VEYL address first.' : 'Inspect the deployment plan and addresses. Trading opens after deployment is confirmed.')}</p>${configured ? button('open-launch', launchOpen ? 'Hide launch terms' : 'Set launch terms', !client.wallet.state().ethereum, true) : button('factory', `Prepare infrastructure · step ${policy.infrastructureStep || 1} of 5`, !client.wallet.state().ethereum, true)}</div>${launchOpen && configured ? launchForm() : ''}${canAdopt ? `<details><summary>Import confirmed VEYL platform launch</summary><p class="hint">Enter the platform launch receipt. Veyl verifies its canonical contracts, owner, liquidity terms and position NFT before attaching it to this workspace. No transaction is sent.</p><form data-mainnet-form="adopt">${field('Platform launch transaction hash', 'transactionHash', '0x…')}<button class="button secondary" ${busy || !client.wallet.state().ethereum ? 'disabled' : ''}>Verify & import platform market</button></form></details>` : ''}</section>`;
+    const launchReady = canPrepareLaunch(), setupReady = canPrepareInfrastructure(), canAdopt = capabilitiesReady && platformOwner();
+    let title = 'Agent market launch is not available yet.', description = 'Veyl’s shared market setup is incomplete. You can continue configuring your agent and refresh this tab later.';
+    if (!capabilitiesReady) { title = refreshing ? 'Checking market availability…' : 'Market availability could not be checked.'; description = refreshing ? 'Reading the current launch configuration.' : 'Refresh this tab to try again. No transaction has been prepared.'; }
+    else if (platformMarket() && !platformOwner()) { title = 'VEYL platform token'; description = 'Only the configured platform owner can set up or import this market.'; }
+    else if (!statusReady && (policy.canPrepareLaunch || policy.canPrepareInfrastructure)) { title = 'Market status is temporarily unavailable.'; description = 'Refresh to check Ethereum again before preparing a launch.'; }
+    else if (launchReady) { title = platformMarket() ? 'VEYL platform token' : 'Create this agent’s market.'; description = 'Preview the seed, token allocation and contract addresses before the wallet asks you to sign.'; }
+    else if (setupReady) { title = platformMarket() ? 'VEYL platform token setup' : 'Ethereum market setup.'; description = 'Inspect the deployment plan and addresses. Trading opens after deployment is confirmed.'; }
+    else if (platformMarket()) { title = 'Platform market setup is unavailable.'; description = 'Refresh to check the reviewed platform launch configuration.'; }
+    return `<section class="panel">${walletBar()}<div class="empty" role="status"><b>${title}</b><p>${description}</p>${launchReady ? button('open-launch', launchOpen ? 'Hide launch terms' : 'Set launch terms', !client.wallet.state().ethereum, true) : setupReady ? button('factory', `Prepare infrastructure · step ${policy.infrastructureStep || 1} of 5`, !client.wallet.state().ethereum, true) : ''}</div>${launchOpen && launchReady ? launchForm() : ''}${canAdopt ? `<details><summary>Import confirmed VEYL platform launch</summary><p class="hint">Enter the platform launch receipt. Veyl verifies its canonical contracts, owner, liquidity terms and position NFT before attaching it to this workspace. No transaction is sent.</p><form data-mainnet-form="adopt">${field('Platform launch transaction hash', 'transactionHash', '0x…')}<button class="button secondary" ${busy || !client.wallet.state().ethereum ? 'disabled' : ''}>Verify & import platform market</button></form></details>` : ''}</section>`;
   }
   function tradePanel() {
     return `<section class="panel trade-panel"><div class="section-title"><div><h2>Trade ${esc(project.symbol)}</h2><p>Quoted against the actual Ethereum pool.</p>${state.launchLimits?.enabled ? `<p class="hint">${state.launchLimits.active ? 'Launch limits active: 20 million tokens per ERC-20 transfer and wallet. Standard v4 routing remains open.' : 'The ten-block launch limit has ended.'} Limits end at block ${esc(state.launchLimits.endsAtBlock)}. Contract checks apply when mined.</p>` : ''}</div><span class="badge">ETHEREUM</span></div><form data-mainnet-form="quote"><div class="form-row"><label>Side<select name="side"><option value="buy" ${trade.side === 'buy' ? 'selected' : ''}>Buy ${esc(project.symbol)}</option><option value="sell" ${trade.side === 'sell' ? 'selected' : ''}>Sell ${esc(project.symbol)}</option></select></label><label>Amount in<input name="amount" inputmode="decimal" placeholder="${trade.side === 'buy' ? esc(quoteSymbol()) : esc(project.symbol)}" value="${esc(trade.amount)}" required></label></div><label>Slippage tolerance<select name="slippageBps"><option value="50">0.5%</option><option value="100">1%</option><option value="200">2%</option></select></label><button class="button" ${busy || !client.wallet.state().ethereum ? 'disabled' : ''}>Get live quote</button></form>${quote ? `<div class="quote-card"><span class="label">Estimated received</span><strong>${amount(quote.expectedOutput)} ${quote.side === 'buy' ? esc(project.symbol) : esc(quoteSymbol())}</strong><dl>${row('Minimum after fees', `${amount(quote.minimumOutput)} ${quote.side === 'buy' ? esc(project.symbol) : esc(quoteSymbol())}`)}${row('Hook fee', `${amount(quote.feeQuote ?? quote.feeEth)} ${esc(quoteSymbol())}`)}${row('Valid until', esc(new Date(quote.expiresAt).toLocaleTimeString()))}</dl>${button('prepare-swap', quote.side === 'sell' ? 'Review approval / sale' : quoteSymbol() === 'VEYL' ? 'Review approval / purchase' : 'Review purchase', quote.expiresAt <= Date.now())}</div>` : ''}</section>`;
@@ -81,7 +92,7 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
   }
   function reviewPanel() {
     if (!intent) return '';
-    const tx = intent.transaction, sendable = client.transactionsEnabled && policy.transactionsEnabled === true && client.wallet.state().ethereum && client.wallet.account?.toLowerCase() === intent.account?.toLowerCase() && intent.status === 'prepared' && intent.expiresAt > Date.now();
+    const tx = intent.transaction, sendable = client.transactionsEnabled && policy.transactionsEnabled === true && intentAvailable() && client.wallet.state().ethereum && client.wallet.account?.toLowerCase() === intent.account?.toLowerCase() && intent.status === 'prepared' && intent.expiresAt > Date.now();
     const eth = exactEth(tx.value);
     return `<section class="panel quote-card" aria-live="polite"><div class="section-title"><div><h2>Review ${esc(intent.kind)}</h2><p>${intent.status === 'confirmed' ? 'Confirmed on Ethereum.' : 'Prepared transaction · your wallet is the signer.'}</p></div><span class="badge">${esc(intent.status)}</span></div><dl class="market-metrics">${row('From', addressLink(tx.from))}${row('To', tx.to ? addressLink(tx.to) : 'New verified infrastructure')}${row('ETH sent', `${eth} ETH`)}${row('Network', 'Ethereum · chain 1')}${treasuryReview()}${intent.minimumOutput ? row('Minimum received', esc(intent.minimumOutput)) : ''}${intent.approvalAsset ? row('Exact allowance', `${exactEth(intent.amount)} ${esc(intent.approvalAssetSymbol)}`) + row('Approved spender', addressLink(intent.spender)) : ''}${intent.conversionPolicy ? row('Conversion policy', esc(JSON.stringify(intent.conversionPolicy))) : ''}${intent.kind === 'convert-fees' ? row('Payout split after conversion', '70% agent / 20% creator / 10% platform in ETH') : ''}${intent.deploymentStep ? row('Deployment step', `${intent.deploymentStep} of ${intent.deploymentSteps}`) : ''}${intent.launchProtection ? row('Launch limits', '2% per transfer / wallet · first 10 blocks') : ''}${intent.allocation ? row('Liquidity seed', `${esc(intent.allocation.liquidityQuote ?? intent.allocation.liquidityEth)} ${esc(intent.allocation.quoteSymbol || 'ETH')} + ${amount(intent.allocation.liquidityTokens)} ${esc(project.symbol)}`) + row('Creator allocation', `${amount(intent.allocation.creatorTokens)} ${esc(project.symbol)}`) + row(treasuryLabel(), `${esc(intent.allocation.treasuryEth)} ETH`) : ''}</dl>${intent.allocation?.custody === 'deployer-position-nft' ? `<details><summary>Exact allocation & NFT custody</summary><dl class="market-metrics">${row('Actual liquidity tokens', esc(intent.allocation.liquidityTokens))}${row('Actual creator tokens', esc(intent.allocation.creatorTokens))}${row('Rounding added to liquidity', esc(intent.allocation.roundingDustTokens) + ' VEYL')}${row('Starting FDV', esc(intent.allocation.startingFdvEth) + ' ETH')}${row('NFT recipient', addressLink(intent.allocation.nftRecipient))}${row('PositionManager', addressLink(intent.allocation.positionManager))}</dl><p class="hint">The NFT remains movable and its liquidity removable by its owner. No transfer to the dead address is included in this transaction.</p></details>` : ''}${intent.transactionHash ? `<p><a class="text-link" href="${client.explorer(intent.transactionHash)}" target="_blank" rel="noopener noreferrer">View transaction ↗</a></p>` : ''}<details><summary>Exact calldata & identity</summary><p class="address">Intent: ${esc(intent.id)}<br>Digest: ${esc(intent.digest)}</p><textarea readonly rows="4" aria-label="Unsigned transaction JSON">${esc(JSON.stringify(tx, null, 2))}</textarea></details><div class="fee-actions">${button('send', 'Review in wallet', !sendable)}${button('download', 'Download unsigned transaction', false, true)}</div>${!client.transactionsEnabled ? '<p class="hint">Transaction approval is off. Inspect or download the transaction for review.</p>' : '<p class="hint">Your wallet calculates gas separately. Check the network, recipient and amount before confirming.</p>'}</section>`;
   }
@@ -98,12 +109,26 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
     element.innerHTML = `${error ? `<p class="storage-alert" role="alert">${esc(error)}</p>` : ''}${state?.launched ? `<div class="market-grid">${tradePanel()}${poolPanel()}</div>` : launchState()}${reviewPanel()}${recoverPanel()}`;
   }
   async function refresh() {
-    try { [state, policy] = await Promise.all([client.status(project.id), client.capabilities(project.id)]); client.transactionsEnabled = capabilities.transactionsEnabled === true && policy.transactionsEnabled === true; error = ''; }
-    catch (e) { error = e.message; } render(); return state;
+    const revision = ++refreshRevision; refreshing = true; client.transactionsEnabled = false; render();
+    const [statusResult, capabilityResult] = await Promise.allSettled([client.status(project.id), client.capabilities(project.id)]);
+    if (!live || revision !== refreshRevision) return state;
+    refreshing = false; statusReady = statusResult.status === 'fulfilled'; capabilitiesReady = capabilityResult.status === 'fulfilled';
+    state = statusReady ? statusResult.value : null;
+    if (capabilitiesReady) policy = capabilityResult.value;
+    client.transactionsEnabled = capabilities.transactionsEnabled === true && capabilitiesReady && statusReady && policy.transactionsEnabled === true;
+    if (!statusReady || !capabilitiesReady || !intentAvailable()) { previewRevision++; intent = null; quote = null; }
+    if (!canPrepareLaunch()) launchOpen = false;
+    error = state?.launched && !capabilitiesReady ? 'Market permissions could not be checked. Refresh before preparing a transaction.' : '';
+    render(); return state;
   }
   async function act(fn) {
     if (busy) return; busy = true; error = ''; render();
-    try { await fn(); } catch (e) { error = e.message; notify(e.message); } finally { busy = false; render(); }
+    try { await fn(); } catch (e) {
+      const configurationFailure = !state?.launched && !platformMarket() && /reviewed main VEYL|main VEYL\/ETH market|shared (?:agent )?(?:factory|market)|market infrastructure|configured (?:quote|factory|main market)/i.test(e.message || '');
+      if (configurationFailure) { statusReady = false; launchOpen = false; previewRevision++; intent = null; error = 'Market availability changed. Refresh this tab before preparing a launch.'; }
+      else error = e.message;
+      notify(error);
+    } finally { busy = false; render(); }
   }
   const click = async event => {
     const target = event.target.closest('[data-mainnet]'); if (!target || !element.contains(target) || target.disabled) return;
@@ -113,13 +138,17 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
       if (task === 'connect') { await client.wallet.connect(); await refresh(); }
       if (task === 'switch') { await client.wallet.switchEthereum(); await refresh(); }
       if (task === 'refresh') await refresh();
-      if (task === 'open-launch') launchOpen = !launchOpen;
-      if (task === 'factory') intent = await client.prepare(project.id, 'factory');
+      if (task === 'open-launch') { if (!canPrepareLaunch()) throw new Error('Agent market launch is not available. Refresh availability first.'); launchOpen = !launchOpen; }
+      if (task === 'factory') {
+        if (!canPrepareInfrastructure()) throw new Error('Market infrastructure is managed by Veyl. Refresh availability before launching.');
+        const revision = previewRevision, prepared = await client.prepare(project.id, 'factory');
+        if (live && revision === previewRevision && canPrepareInfrastructure()) intent = prepared;
+      }
       if (task === 'prepare-swap') intent = await client.prepare(project.id, 'swap', { quoteId: quote.id });
       if (task === 'disable-conversion') intent = await client.prepare(project.id, 'maintenance', { action: 'configure-conversion', enabled: false });
       if (task === 'flush' || task === 'distribute') intent = await client.prepare(project.id, 'maintenance', { action: task, ...(target.dataset.beneficiary ? { beneficiary: target.dataset.beneficiary } : {}) });
       if (task === 'send') {
-        if (!intent || !client.transactionsEnabled || policy.transactionsEnabled !== true || !client.wallet.state().ethereum || client.wallet.account?.toLowerCase() !== intent.account?.toLowerCase() || intent.status !== 'prepared' || intent.expiresAt <= Date.now()) throw new Error('Prepare and review a current enabled transaction before sending.');
+        if (!intent || !client.transactionsEnabled || policy.transactionsEnabled !== true || !intentAvailable() || !client.wallet.state().ethereum || client.wallet.account?.toLowerCase() !== intent.account?.toLowerCase() || intent.status !== 'prepared' || intent.expiresAt <= Date.now()) throw new Error('Prepare and review a current enabled transaction before sending.');
         const reviewed = intent, revision = previewRevision, result = await client.execute(project.id, reviewed);
         if (live && revision === previewRevision) intent = { ...reviewed, ...result };
         notify(result.status === 'confirmed' ? 'Transaction confirmed.' : 'Transaction submitted. Its receipt is saved for recovery.'); await refresh(); onChange();
@@ -133,7 +162,7 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
     event.preventDefault(); const values = Object.fromEntries(new FormData(form));
     await act(async () => {
       if (form.dataset.mainnetForm === 'adopt') {
-        if (!platformMarket() || !policy.mainTokenLaunch?.recipient || client.wallet.account?.toLowerCase() !== policy.mainTokenLaunch.recipient.toLowerCase()) throw new Error('Only the configured platform owner can import this launch.');
+        if (!capabilitiesReady || !platformOwner()) throw new Error('Only the configured platform owner can import this launch.');
         await client.prepare(project.id, 'adopt', { transactionHash: values.transactionHash });
         intent = null; await refresh(); onChange(); notify('Verified VEYL platform market attached to this workspace.');
       }
@@ -146,7 +175,12 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
         const prepared = await client.prepare(project.id, 'maintenance', input);
         if (live && revision === previewRevision) intent = prepared;
       }
-      if (form.dataset.mainnetForm === 'launch') { launchTerms = values; intent = await client.prepare(project.id, 'launch', { ...values, tickLower: Number(values.tickLower), tickUpper: Number(values.tickUpper), slippageBps: Number(values.slippageBps) }); }
+      if (form.dataset.mainnetForm === 'launch') {
+        if (!canPrepareLaunch()) throw new Error('Agent market launch is not available. Refresh availability first.');
+        launchTerms = values; const revision = previewRevision;
+        const prepared = await client.prepare(project.id, 'launch', { ...values, tickLower: Number(values.tickLower), tickUpper: Number(values.tickUpper), slippageBps: Number(values.slippageBps) });
+        if (live && revision === previewRevision && canPrepareLaunch()) intent = prepared;
+      }
       if (form.dataset.mainnetForm === 'conversion-policy') intent = await client.prepare(project.id, 'maintenance', { ...values, action: 'configure-conversion', enabled: true });
       if (form.dataset.mainnetForm === 'conversion') intent = await client.prepare(project.id, 'maintenance', { ...values, action: 'convert-fees', slippageBps: Number(values.slippageBps) });
       if (form.dataset.mainnetForm === 'quote') { trade = { ...values, slippageBps: Number(values.slippageBps) }; quote = await client.prepare(project.id, 'quote', trade); intent = null; }
@@ -166,5 +200,5 @@ export function mountMainnetPanel(element, { project, api, client = new VeylChai
     }
   };
   element.addEventListener('click', click); element.addEventListener('submit', submit); element.addEventListener('input', editTreasury); element.addEventListener('change', editTreasury); render(); void refresh();
-  return { client, refresh, destroy() { live = false; previewRevision++; element.removeEventListener('click', click); element.removeEventListener('submit', submit); element.removeEventListener('input', editTreasury); element.removeEventListener('change', editTreasury); client.removeEventListener('change', stateChanged); } };
+  return { client, refresh, destroy() { live = false; previewRevision++; refreshRevision++; element.removeEventListener('click', click); element.removeEventListener('submit', submit); element.removeEventListener('input', editTreasury); element.removeEventListener('change', editTreasury); client.removeEventListener('change', stateChanged); } };
 }

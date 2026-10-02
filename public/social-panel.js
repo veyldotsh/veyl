@@ -7,6 +7,11 @@ const date = value => Number.isFinite(value) ? new Date(value).toLocaleString() 
 
 export function checkedSocialSnapshot(value, projectId) {
   if (!value || value.projectId !== projectId || !value.accounts || !Array.isArray(value.outbox) || value.outbox.length > 2000 || typeof value.publishingEnabled !== 'boolean' || typeof value.xConfigured !== 'boolean') throw new Error('The connection status could not be verified. Refresh before continuing.');
+  if (value.xApp !== undefined) {
+    const app = value.xApp;
+    if (!app || !['platform', 'custom'].includes(app.mode) || typeof app.platformAvailable !== 'boolean' || Object.keys(app).some(key => !['mode', 'callbackUri', 'platformAvailable'].includes(key))) throw new Error('The X app status could not be verified.');
+    if (app.callbackUri !== null) { let url; try { url = new URL(app.callbackUri); } catch {} if (!url || url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('The fixed X callback could not be verified.'); }
+  }
   const ids = new Set();
   for (const item of value.outbox) {
     if (!uuid(item.id) || ids.has(item.id) || !channels.has(item.channel) || !states.has(item.status) || item.preview?.projectId !== projectId || item.preview?.channel !== item.channel || typeof item.preview.text !== 'string' || item.preview.text.length > 4096 || !/^[a-f0-9]{64}$/.test(item.approvalDigest || '') || !Number.isFinite(item.expiresAt)) throw new Error('A draft has invalid review data. Publishing is unavailable.');
@@ -21,7 +26,7 @@ export function checkedXAuthorization(value, projectId) {
       typeof value.state !== 'string' || !value.state.startsWith(projectId + '.') || !/^[a-f0-9-]{36}\.[A-Za-z0-9_-]{43}$/.test(value.state) ||
       url.searchParams.get('state') !== value.state || url.searchParams.get('response_type') !== 'code' || url.searchParams.get('code_challenge_method') !== 'S256') throw new Error('The X authorization link does not match this project.');
   // Navigate to the exact server URL. The browser never invents a successful
-  // callback, handles app credentials, or reconstructs OAuth parameters.
+  // callback or reconstructs OAuth parameters. Saved credentials are never read back.
   return value.authorizationUrl;
 }
 
@@ -42,10 +47,16 @@ export function mountSocialPanel(element, { project, hosted = false, api, notify
   const account = channel => snapshot?.accounts[channel];
   const canDraft = channel => account(channel)?.status === 'connected';
 
+  function xAppSettings() {
+    const app = snapshot.xApp; if (!app) return '';
+    const connected = !!account('x');
+    return `<details><summary>X app · ${app.mode === 'custom' ? 'Your app' : 'Veyl app'}</summary><p class="hint">Use Veyl’s app when available, or supply your own OAuth 2.0 app for this agent. Register this exact callback in X:</p><p class="address"><code>${esc(app.callbackUri || 'Server callback unavailable')}</code></p><p class="hint">Enable tweet.read, tweet.write, users.read and offline.access. X app access and API permissions are managed in your X developer account.</p>${connected ? '<p class="hint">Disconnect this agent’s X account below before changing its app. This cancels unsent X drafts and pending authorizations.</p>' : app.callbackUri ? `<form data-social-form="x-app" autocomplete="off"><fieldset ${busy ? 'disabled' : ''}><label>OAuth 2.0 client ID<input name="clientId" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="512" required placeholder="Enter your app client ID"></label><label>Client secret · confidential apps only<input type="password" name="clientSecret" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="4096" placeholder="Leave blank only for a public app"></label><p class="hint">Credentials are encrypted for this agent and never displayed again. Saving replaces its app and cancels pending X authorizations and unsent drafts. Web and bot apps normally require a client secret.</p><button type="submit" class="button secondary">Save my X app</button></fieldset></form>${app.mode === 'custom' ? button('x-app-platform', app.platformAvailable ? 'Remove my app · use Veyl app' : 'Remove my saved app') : ''}${!app.platformAvailable ? '<p class="hint">The Veyl app is unavailable. Your own configured app can be used instead.</p>' : ''}` : '<p class="hint">The server callback must be available before an app can be saved.</p>'}</details>`;
+  }
+
   function accountCard(channel) {
     const saved = account(channel), connected = saved?.status === 'connected', reconnect = !!saved && !connected;
     const status = connected ? 'Connected' : reconnect ? 'Reconnect required' : 'Not connected';
-    return `<article class="panel"><div class="section-title"><div><h2>${label(channel)}</h2><p>${esc(status)}</p></div><span class="badge">${connected ? 'CONNECTED' : 'ACCOUNT'}</span></div>${saved ? `<p><strong>${esc(saved.username ? '@' + saved.username : saved.id)}</strong>${channel === 'telegram' ? `<br><span class="hint">${esc(saved.chatTitle || 'Telegram chat')} · ${esc(saved.chatId)}</span>` : ''}</p>` : `<p class="subtext">${channel === 'x' ? 'Authorize this project to prepare and publish reviewed posts.' : 'Connect a bot to the exact group, channel or private chat you choose.'}</p>`}${channel === 'x' ? `${button('x-begin', saved ? 'Reconnect X ↗' : 'Connect X ↗', !snapshot.xConfigured)}${!snapshot.xConfigured ? '<p class="hint">The operator still needs to configure the X developer app.</p>' : '<p class="hint">Continue on X to review account permissions.</p>'}` : `<details><summary>${saved ? 'Replace Telegram connection' : 'Connect a Telegram bot'}</summary><form data-social-form="telegram" autocomplete="off"><fieldset ${busy ? 'disabled' : ''}><label>Bot token<input type="password" name="token" autocomplete="off" spellcheck="false" autocapitalize="off" required maxlength="256" placeholder="Enter your bot token" aria-describedby="telegram-token-note"></label><label>Exact numeric chat ID<input name="chatId" inputmode="numeric" autocomplete="off" required maxlength="17" pattern="-?[1-9][0-9]{0,15}" placeholder="e.g. -1001234567890"></label><p id="telegram-token-note" class="hint">Sent securely to this workspace and encrypted at rest. The operator can decrypt hosted credentials. The token field clears when submitted. Groups and channels require bot administrator permission.</p><button type="submit" class="button secondary">Verify & connect</button></fieldset></form></details>`}${saved ? `<details><summary>Connection settings</summary><p class="hint">Disconnecting removes this project’s stored credentials and cancels its unsent drafts. Revoke app access on X or rotate the Telegram token to invalidate provider credentials too.</p>${button('disconnect', 'Disconnect ' + label(channel), false, `data-channel="${channel}"`)}</details>` : ''}</article>`;
+    return `<article class="panel"><div class="section-title"><div><h2>${label(channel)}</h2><p>${esc(status)}</p></div><span class="badge">${connected ? 'CONNECTED' : 'ACCOUNT'}</span></div>${saved ? `<p><strong>${esc(saved.username ? '@' + saved.username : saved.id)}</strong>${channel === 'telegram' ? `<br><span class="hint">${esc(saved.chatTitle || 'Telegram chat')} · ${esc(saved.chatId)}</span>` : ''}</p>` : `<p class="subtext">${channel === 'x' ? 'Authorize this project to prepare and publish reviewed posts.' : 'Connect a bot to the exact group, channel or private chat you choose.'}</p>`}${channel === 'x' ? `${button('x-begin', saved ? 'Reconnect X ↗' : 'Connect X ↗', !snapshot.xConfigured)}${!snapshot.xConfigured ? '<p class="hint">Configure your own X app below, or use the Veyl app when available.</p>' : '<p class="hint">Continue on X to review account permissions.</p>'}${xAppSettings()}` : `<details><summary>${saved ? 'Replace Telegram connection' : 'Connect a Telegram bot'}</summary><form data-social-form="telegram" autocomplete="off"><fieldset ${busy ? 'disabled' : ''}><label>Bot token<input type="password" name="token" autocomplete="off" spellcheck="false" autocapitalize="off" required maxlength="256" placeholder="Enter your bot token" aria-describedby="telegram-token-note"></label><label>Exact numeric chat ID<input name="chatId" inputmode="numeric" autocomplete="off" required maxlength="17" pattern="-?[1-9][0-9]{0,15}" placeholder="e.g. -1001234567890"></label><p id="telegram-token-note" class="hint">Sent securely to this workspace and encrypted at rest. The operator can decrypt hosted credentials. The token field clears when submitted. Groups and channels require bot administrator permission.</p><button type="submit" class="button secondary">Verify & connect</button></fieldset></form></details>`}${saved ? `<details><summary>Connection settings</summary><p class="hint">Disconnecting removes this project’s stored credentials and cancels its unsent drafts. Revoke app access on X or rotate the Telegram token to invalidate provider credentials too.</p>${button('disconnect', 'Disconnect ' + label(channel), false, `data-channel="${channel}"`)}</details>` : ''}</article>`;
   }
   function reviewPanel(item) {
     if (!item) return '<div class="empty"><b>Review before anything leaves.</b>Open a saved draft to inspect its exact account, destination and text.</div>';
@@ -92,6 +103,10 @@ export function mountSocialPanel(element, { project, hosted = false, api, notify
         if (!channels.has(control.dataset.channel)) return;
         await api(base + '/disconnect', { channel: control.dataset.channel }); if (active()) { reviewed = null; notify('Connection removed from this project.'); } await read(); return;
       }
+      if (action === 'x-app-platform') {
+        if (account('x') || snapshot.xApp?.mode !== 'custom') throw new Error('Disconnect this agent’s X account before changing its app.');
+        await api(base + '/x-app', { mode: 'platform' }); reviewed = null; await read(); if (active()) notify('Custom X app removed from this agent.'); return;
+      }
       const item = snapshot.outbox.find(entry => entry.id === control.dataset.intent);
       if (!item) throw new Error('Read the current draft before continuing.');
       if (action === 'publish') {
@@ -115,7 +130,17 @@ export function mountSocialPanel(element, { project, hosted = false, api, notify
   const submit = event => {
     const form = event.target.closest('[data-social-form]'); if (!form || !element.contains(form)) return;
     event.preventDefault(); event.stopPropagation(); if (busy || !hosted) return;
-    if (form.dataset.socialForm === 'telegram') {
+    if (form.dataset.socialForm === 'x-app') {
+      const payload = { mode: 'custom', clientId: form.elements.clientId.value.trim(), clientSecret: form.elements.clientSecret.value.trim() };
+      form.elements.clientId.value = ''; form.elements.clientSecret.value = '';
+      void run(async () => {
+        try {
+          if (account('x') || !snapshot?.xApp?.callbackUri) throw new Error();
+          await api(base + '/x-app', payload); reviewed = null; await read(); if (active()) notify('X app saved for this agent. Connect X to authorize its account.');
+        } catch { throw new Error('X app settings could not be confirmed. Disconnect X first if connected, then refresh status before trying again.'); }
+        finally { payload.clientId = ''; payload.clientSecret = ''; }
+      });
+    } else if (form.dataset.socialForm === 'telegram') {
       const payload = { token: form.elements.token.value.trim(), chatId: form.elements.chatId.value.trim() };
       form.elements.token.value = ''; form.elements.chatId.value = '';
       void run(async () => { try { await api(base + '/telegram', payload); if (active()) notify('Telegram destination verified.'); await read(); } finally { payload.token = ''; payload.chatId = ''; } });

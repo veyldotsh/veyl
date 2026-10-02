@@ -227,6 +227,21 @@ Configure a developer app with `tweet.read tweet.write users.read offline.access
 and callback `https://veyl.sh/oauth/x`. App access and account/API entitlements
 are provider requirements; no Veyl test creates those credentials.
 
+Owners can supply a separate OAuth 2.0 app in each agent’s Connections page.
+`POST /api/projects/:id/social/x-app` accepts `{mode:"custom",clientId,clientSecret?}`
+or `{mode:"platform"}` to remove it and restore the configured Veyl app fallback.
+The callback is fixed by the worker and cannot be overridden by a request.
+Confidential web/bot apps require their client secret; public apps omit it.
+Custom credentials share the existing encrypted wallet/project state and never
+appear in snapshots, logs or browser storage. Inputs clear before submission.
+Disconnect the X account before changing apps. Disconnecting invalidates pending
+OAuth authorizations and unsent X drafts, while uncertain publication history
+is preserved. Disconnecting the account retains its saved app until the owner
+explicitly removes or replaces it. OAuth state and connected accounts bind to
+the selected app credentials and fixed callback; legacy unbound connections or
+changed platform credentials require fresh authorization before publication.
+Tests use mock providers; live account authorization was deliberately not run.
+
 X text validation uses the official `twitter-text` 3.1.0 parser: shortened URLs,
 combined emoji and NFC normalization follow the provider's weighted limit.
 SDK/MCP/browser inputs allow up to 4,096 raw characters, then the server applies

@@ -95,11 +95,12 @@ test('burned empty NFT does not block fee inspection and a transport failure is 
 });
 
 test('main-token browser form presents approved one-sided NFT terms without a permanent-lock claim', async () => {
-  const policy = new MainnetMarkets({ config, client: {} }).capabilities({ name: 'Veyl', symbol: 'VEYL' });
-  policy.configured = true;
+  const project = { id: 'main', name: 'Veyl', symbol: 'VEYL', mainnetInfrastructure: { factory: published.deployments.find(item => item.contract === 'VeylMarketFactory').address } };
+  const policy = new MainnetMarkets({ config, client: {} }).capabilities(project);
+  assert.equal(policy.canPrepareLaunch, true); assert.equal(policy.canPrepareInfrastructure, false); assert.equal(policy.readiness.status, 'ready');
   const handlers = {}, element = { innerHTML: '', addEventListener: (name, handler) => { handlers[name] = handler; }, removeEventListener() {}, contains: () => true };
   const client = { wallet: { account, state: () => ({ connected: true, ethereum: true, account }) }, addEventListener() {}, removeEventListener() {}, pending: () => [], status: async () => ({ launched: false }), capabilities: async () => policy };
-  const panel = mountMainnetPanel(element, { project: { id: 'main', name: 'Veyl', symbol: 'VEYL' }, client, capabilities: policy });
+  const panel = mountMainnetPanel(element, { project, client, capabilities: policy });
   await panel.refresh();
   const button = { dataset: { mainnet: 'open-launch' }, disabled: false };
   await handlers.click({ target: { closest: () => button } });

@@ -9,7 +9,7 @@ test('worker configuration generates independent private keys and rejects autono
   assert.equal(generated.length, 3); assert.equal(new Set(generated).size, 3);
   assert.notEqual(createWorkerEnvironment(), raw);
   for (const changed of [
-    raw.replace('VEYL_ENABLE_SOCIAL_PUBLISHING=false', 'VEYL_ENABLE_SOCIAL_PUBLISHING=true'),
+    raw.replace('VEYL_ENABLE_SOCIAL_PUBLISHING=false', 'VEYL_ENABLE_SOCIAL_PUBLISHING=yes'),
     raw.replace('VEYL_FEE_KEEPER_ENABLED=false', 'VEYL_FEE_KEEPER_ENABLED=true'),
     raw.replace('BIND_HOST=127.0.0.1', 'BIND_HOST=0.0.0.0'),
     raw.replace('VEYL_MAX_ACTIVE_RUNTIMES=1', 'VEYL_MAX_ACTIVE_RUNTIMES=20'),
@@ -35,6 +35,19 @@ test('existing hosts validate private path overrides without changing their save
   assert.equal(workerEnvironment(env).VEYL_DATA_DIR, '/home/operator/veyl/worker-data/production');
   assert.equal(workerEnvironment(env).VEYL_ZKAPI_CLIENTD, '/home/operator/veyl/bin/zkapi-clientd-control');
   assert.throws(() => validateWorkerEnvironment(raw, {}), /differs/);
+});
+
+test('per-user funding and publishing activation preserves defaults and rejects invalid or unpaired approval flags', () => {
+  const raw = createWorkerEnvironment();
+  const legacy = raw.replace('VEYL_ENABLE_ZKAPI_APPROVAL=false\n', '');
+  assert.equal(validateWorkerEnvironment(legacy), true);
+  for (const flag of ['VEYL_ENABLE_MAINNET_TRANSACTIONS', 'VEYL_ENABLE_ZKAPI_APPROVAL', 'VEYL_ENABLE_SOCIAL_PUBLISHING']) assert.match(raw, new RegExp('^' + flag + '=false$', 'm'));
+  const enabled = raw.replace('VEYL_ENABLE_MAINNET_TRANSACTIONS=false', 'VEYL_ENABLE_MAINNET_TRANSACTIONS=true').replace('VEYL_ENABLE_ZKAPI_APPROVAL=false', 'VEYL_ENABLE_ZKAPI_APPROVAL=true').replace('VEYL_ENABLE_SOCIAL_PUBLISHING=false', 'VEYL_ENABLE_SOCIAL_PUBLISHING=true');
+  assert.equal(validateWorkerEnvironment(enabled), true);
+  assert.throws(() => validateWorkerEnvironment(enabled.replace('VEYL_ENABLE_MAINNET_TRANSACTIONS=true', 'VEYL_ENABLE_MAINNET_TRANSACTIONS=false')));
+  for (const value of ['', 'TRUE', '1', 'yes', 'true ', 'false ']) for (const flag of ['VEYL_ENABLE_ZKAPI_APPROVAL', 'VEYL_ENABLE_SOCIAL_PUBLISHING']) assert.throws(() => validateWorkerEnvironment(enabled.replace(flag + '=true', flag + '=' + value)));
+  for (const field of ['PORT=4320\n', 'VEYL_ENABLE_SOCIAL_PUBLISHING=false\n', 'VEYL_STATE_KEY=']) assert.throws(() => validateWorkerEnvironment(raw.replace(field, '')));
+  assert.throws(() => validateWorkerEnvironment(enabled.replace('VEYL_FEE_KEEPER_ENABLED=false', 'VEYL_FEE_KEEPER_ENABLED=true')));
 });
 
 test('native control verifier rejects foreign or already-patched input rather than applying a loose text patch', () => {

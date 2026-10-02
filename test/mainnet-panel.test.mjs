@@ -111,3 +111,80 @@ test('only the configured platform owner sees launch import, which sends just th
   assert.doesNotMatch(f.element.innerHTML, /data-mainnet-form="adopt"/);
   await f.element.fire('submit', target); assert.equal(f.requests.length, 1);
 });
+
+const sharedPolicy = (ready = false) => ({ transactionsEnabled: false, quoteKind: 'veyl', quoteSymbol: 'VEYL', infrastructureMode: 'shared', configured: ready, canPrepareInfrastructure: false, canPrepareLaunch: ready, readiness: { status: ready ? 'ready' : 'infrastructure-unavailable', message: null } });
+const launchValues = { liquidityQuote: '25', liquidityTokens: '500000000', tokensPerQuote: '20000000', treasuryEth: '0', treasuryOwner: owner, operator, dailyLimitEth: '0', tickLower: '-887200', tickUpper: '887200', slippageBps: '50' };
+function launchForm(values = launchValues) { const target = form(values); target.dataset.mainnetForm = 'launch'; return target; }
+
+test('missing shared setup shows a compact readiness state and never exposes infrastructure or raw status errors', async t => {
+  const f = await fixture(t); f.state.launched = false;
+  f.client.capabilities = async () => sharedPolicy();
+  f.client.status = async () => { throw new Error('Enter a valid public reviewed main VEYL token address.'); };
+  await f.panel.refresh();
+  assert.match(f.element.innerHTML, /Agent market launch is not available yet/);
+  assert.match(f.element.innerHTML, /continue configuring your agent/);
+  assert.doesNotMatch(f.element.innerHTML, /Prepare infrastructure|Set launch terms|valid public reviewed|data-mainnet-form="launch"/);
+  await f.element.fire('click', control('factory'));
+  await f.element.fire('click', control('open-launch'));
+  await f.element.fire('submit', launchForm());
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.client.transactionsEnabled, false);
+});
+
+test('a configured but unavailable shared factory cannot expose launch terms', async t => {
+  const f = await fixture(t); f.state.launched = false; f.state.configured = true;
+  f.client.capabilities = async () => ({ ...sharedPolicy(), configured: true, canPrepareInfrastructure: true });
+  await f.panel.refresh();
+  assert.match(f.element.innerHTML, /Agent market launch is not available yet/);
+  assert.doesNotMatch(f.element.innerHTML, /Prepare infrastructure|Set launch terms/);
+  await f.element.fire('click', control('factory')); assert.equal(f.requests.length, 0);
+});
+
+test('shared readiness enables the agent launch form with VEYL inputs and no infrastructure setup', async t => {
+  const f = await fixture(t); f.state.launched = false;
+  f.client.capabilities = async () => sharedPolicy(true);
+  await f.panel.refresh();
+  assert.match(f.element.innerHTML, /Set launch terms/); assert.doesNotMatch(f.element.innerHTML, /Prepare infrastructure/);
+  await f.element.fire('click', control('open-launch'));
+  assert.match(f.element.innerHTML, /VEYL for liquidity/);
+  await f.element.fire('submit', launchForm());
+  assert.deepEqual(f.requests, [{ projectId: f.project.id, action: 'launch', input: { ...launchValues, tickLower: -887200, tickUpper: 887200, slippageBps: 50 } }]);
+  assert.equal(f.sent.length, 0);
+});
+
+test('status failures preserve successful capabilities while capability failures close launch controls', async t => {
+  const f = await fixture(t); f.state.launched = false;
+  f.client.capabilities = async () => sharedPolicy(true);
+  f.client.status = async () => { throw new Error('internal_rpc_error'); };
+  await f.panel.refresh();
+  assert.match(f.element.innerHTML, /Market status is temporarily unavailable/);
+  assert.doesNotMatch(f.element.innerHTML, /internal_rpc_error|Prepare infrastructure|Set launch terms/);
+  f.client.status = async () => f.state;
+  f.client.capabilities = async () => { throw new Error('internal_config_error'); };
+  await f.panel.refresh();
+  assert.match(f.element.innerHTML, /Market availability could not be checked/);
+  assert.doesNotMatch(f.element.innerHTML, /internal_config_error|Set launch terms/);
+  f.client.capabilities = async () => sharedPolicy(true); await f.panel.refresh();
+  assert.match(f.element.innerHTML, /Set launch terms/);
+});
+
+test('explicit per-project setup remains available and platform setup remains owner-only', async t => {
+  const f = await fixture(t); f.state.launched = false;
+  f.client.capabilities = async () => ({ infrastructureMode: 'per-project', canPrepareInfrastructure: true, canPrepareLaunch: false, infrastructureStep: 2, transactionsEnabled: false });
+  await f.panel.refresh(); assert.match(f.element.innerHTML, /Prepare infrastructure · step 2 of 5/);
+  f.client.capabilities = async () => ({ infrastructureMode: 'per-project', canPrepareInfrastructure: true, liquidityCustody: 'deployer-position-nft', mainTokenLaunch: { recipient: owner }, transactionsEnabled: false });
+  await f.panel.refresh(); assert.match(f.element.innerHTML, /Prepare infrastructure/); assert.match(f.element.innerHTML, /Import confirmed VEYL/);
+  f.client.wallet.account = recipient; f.client.dispatchEvent(new Event('change'));
+  assert.doesNotMatch(f.element.innerHTML, /Prepare infrastructure|Import confirmed VEYL/);
+  await f.element.fire('click', control('factory')); assert.equal(f.requests.length, 0);
+});
+
+test('a configuration change during launch preparation produces a useful refresh message without internal errors', async t => {
+  const f = await fixture(t); f.state.launched = false;
+  f.client.capabilities = async () => sharedPolicy(true); await f.panel.refresh();
+  await f.element.fire('click', control('open-launch'));
+  f.client.prepare = async () => { throw new Error('Enter a valid public reviewed main VEYL token address.'); };
+  await f.element.fire('submit', launchForm());
+  assert.match(f.element.innerHTML, /Market availability changed/);
+  assert.doesNotMatch(f.element.innerHTML, /valid public reviewed|data-mainnet-form="launch"|Prepare infrastructure/);
+});
