@@ -8,7 +8,9 @@ release=${1:?Pass the new named Veyl release directory}
 expected_old=${2:?Pass the exact current Veyl release directory}
 candidate=${3:?Pass the reviewed named native candidate directory}
 fail() { printf 'Veyl accounting upgrade: %s\n' "$*" >&2; exit 1; }
-[[ $# == 3 && $(id -u) == 0 ]] || fail 'Run with sudo and exactly three named paths.'
+[[ ( $# == 3 || ( $# == 4 && "${4:-}" == --recovery-only ) ) && $(id -u) == 0 ]] || fail 'Run with sudo and three named paths, optionally followed by --recovery-only.'
+smoke_args=()
+[[ $# == 3 ]] || smoke_args=(--recovery-only)
 [[ "$release" =~ ^"$base"/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ && "$expected_old" =~ ^"$base"/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || fail 'Invalid worker release path.'
 [[ "$candidate" =~ ^"$base"/native-releases/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || fail 'Invalid native candidate path.'
 for directory in "$base" "$base/bin" "$base/vendor/runtime/bin" "$release" "$expected_old" "$candidate"; do
@@ -98,7 +100,7 @@ systemd-run --quiet --wait --pipe --collect --unit="veyl-accounting-smoke-$$" --
   /usr/bin/env NODE_OPTIONS=--max-old-space-size=384 VEYL_HOME="$base" VEYL_SERVICE_USER="$service_user" VEYL_SMOKE_ROOT="$base/worker-data/acceptance" \
   VEYL_MAINNET_CONFIG="$release/config/mainnet.json" VEYL_ZKAPI_CLIENTD="$candidate/zkapi-clientd-control" \
   VEYL_ZKAPI_WALLETD="$candidate/zkapi-walletd" VEYL_ZKAPI_MANIFEST="$candidate/runtime-manifest.json" \
-  /usr/bin/node "$release/scripts/check-vps-runtime.mjs"
+  /usr/bin/node "$release/scripts/check-vps-runtime.mjs" "${smoke_args[@]}"
 [[ "$(sha256sum "$base/runtime.env")" == "$env_digest" && "$(sha256sum "$client")" == "$client_digest" && "$(sha256sum "$manifest")" == "$manifest_digest" && "$(readlink "$wallet")" == "$old_wallet_link" && "$(sha256sum "$old_wallet")" == "$wallet_digest" && "$(realpath "$base/current")" == "$old" ]] || fail 'Existing installation changed during preparation.'
 [[ "$(cd "$candidate" && sha256sum zkapi-clientd-control zkapi-walletd runtime-manifest.json source-lock.json build-report.json go-build-report.json)" == "$candidate_digest" ]] || fail 'Candidate changed during preparation.'
 backups="$base/native-backups"
@@ -174,3 +176,4 @@ systemctl start veyl.service
 healthy "$release" || fail 'New worker health failed.'
 committed=1
 printf 'Veyl native accounting and worker release healthy. Prior native recovery files: %s\n' "$backup"
+if [[ ${#smoke_args[@]} != 0 ]]; then printf 'Acceptance scope: wallet recovery only. Model catalog was not checked; inference readiness is not established.\n'; fi

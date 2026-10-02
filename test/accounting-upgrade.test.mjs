@@ -12,7 +12,7 @@ const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' 
 const unix = path => path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase());
 const script = readFileSync(new URL('../deployment/upgrade-accounting-worker.sh', import.meta.url), 'utf8');
 const enabled = existsSync(bash);
-function fixture(fault = '') {
+function fixture(fault = '', option = null) {
   const root = mkdtempSync(join(tmpdir(), 'veyl-upgrade-')), base = unix(join(root, 'veyl')), mocks = unix(join(root, 'mocks')), etc = unix(join(root, 'etc'));
   const release = base + '/releases/new', old = base + '/releases/old', candidate = base + '/native-releases/reviewed';
   mkdirSync(join(root, 'mocks'));
@@ -76,7 +76,7 @@ fi`);
   writeFileSync(join(root, 'paths.sh'), readFileSync(new URL('../deployment/paths.sh', import.meta.url)));
   // Git Bash honors its own symlink representation without Windows symlink privileges.
   prepared = run('chmod 755 "$1"/*', [mocks]); assert.equal(prepared.status, 0, prepared.stderr);
-  const result = run('bash "$1" "$2" "$3" "$4"', [unix(join(root, 'upgrade.sh')), release, old, candidate]);
+  const result = run(option === null ? 'bash "$1" "$2" "$3" "$4"' : 'bash "$1" "$2" "$3" "$4" "$5"', [unix(join(root, 'upgrade.sh')), release, old, candidate, ...(option === null ? [] : [option])]);
   const inspect = run('printf "client=%s\\nwallet=%s\\nmanifest=%s\\ncurrent=%s\\nenv=%s\\noriginal=%s\\nstate=%s\\nservice=%s\\n" "$(cat "$1/bin/zkapi-clientd-control")" "$(readlink "$1/vendor/runtime/bin/zkapi-walletd")" "$(cat "$1/bin/runtime-manifest.json")" "$(realpath "$1/current")" "$(cat "$1/runtime.env")" "$(cat "$1/vendor/runtime/lib/original/zkapi-walletd")" "$(cat "$1/worker-data/state")" "$(cat "$1/service-state")"', [base]);
   assert.equal(inspect.status, 0, inspect.stderr);
   const state = Object.fromEntries(inspect.stdout.trim().split('\n').map(line => { const split = line.indexOf('='); return [line.slice(0, split), line.slice(split + 1)]; }));
@@ -97,6 +97,18 @@ test('accounting upgrade validates and switches four paths while preserving stat
   assert.ok(checks[0].includes(f.old + '/scripts/verify-native-install.mjs'));
   assert.ok(checks[1].includes(f.release + '/scripts/verify-accounting-runtime.mjs ' + f.candidate));
   assert.ok(checks[2].includes(f.release + '/scripts/verify-native-install.mjs'));
+  assert.doesNotMatch(f.prepareLog, /--recovery-only/);
+});
+test('accounting upgrade forwards only explicitly selected recovery scope to smoke and preserves all installation checks', { skip: !enabled }, () => {
+  const f = fixture('', '--recovery-only'); assert.equal(f.result.status, 0, f.result.stderr);
+  const scoped = f.prepareLog.split('\n').filter(line => line.includes('--recovery-only'));
+  assert.equal(scoped.length, 1); assert.ok(scoped[0].endsWith('/scripts/check-vps-runtime.mjs --recovery-only'));
+  assert.equal(f.state.env, 'private-unchanged'); assert.equal(f.state.state, 'data'); assert.equal(f.state.current, f.release);
+  assert.match(f.result.stdout, /wallet recovery only/);
+});
+test('accounting upgrade rejects unknown acceptance scope before touching the worker', { skip: !enabled }, () => {
+  const f = fixture('', '--skip-catalog'); assert.notEqual(f.result.status, 0); preserved(f);
+  assert.equal(f.log, ''); assert.equal(f.prepareLog, '');
 });
 for (const fault of ['old-native', 'candidate', 'smoke', 'resource-limit']) test('accounting upgrade rejects ' + fault + ' before stopping the worker', { skip: !enabled }, () => {
   const f = fixture(fault); assert.notEqual(f.result.status, 0); preserved(f); assert.doesNotMatch(f.log, /^stop /m);

@@ -8,7 +8,9 @@ import { TenantRegistry, createProductionApp } from '../src/production.mjs';
 import { MainnetMarkets } from '../src/mainnet.mjs';
 import { WalletAuth } from '../src/auth.mjs';
 import { GatewayVerifier } from '../src/gateway-auth.mjs';
+import { runtimeSmokeScope, checkSmokeCatalog, requireSmokeAccounting } from './runtime-smoke-scope.mjs';
 
+const scope = runtimeSmokeScope(process.argv.slice(2));
 const { base } = installationPaths();
 const smokeRoot = process.env.VEYL_SMOKE_ROOT || base + '/data';
 if (![base + '/data', base + '/worker-data/acceptance'].includes(smokeRoot)) throw new Error('Smoke data must remain in the dedicated Veyl acceptance directory.');
@@ -46,14 +48,15 @@ try {
   const kit = registry.get(owner), project = kit.create({ requestKey: randomUUID(), name: 'Runtime acceptance', symbol: 'QA', purpose: 'Unfunded daemon health check only; do not perform inference or transactions.', template: 'research', swarm: false, model: 'pending', total: 1000000, daily: 1000000, request: 500000 });
   const runtime = await registry.provision(owner, project);
   const entry = registry.configuration.data.projects[0]; ports.push(Number(new URL(entry.origin).port), entry.companionPort);
-  const health = await runtime.provider.diagnostics({ expectedNetwork: 'mainnet' }), models = await runtime.provider.models(), funding = await runtime.funding.inspect();
-  if (!health.reachable || !models.length || funding.funding.chainId !== 1 || !['ready', 'waiting_funds'].includes(funding.funding.phase)) throw new Error('Unfunded daemon acceptance failed.');
+  const health = await runtime.provider.diagnostics({ expectedNetwork: 'mainnet' }), catalog = await checkSmokeCatalog(runtime.provider, scope), funding = await runtime.funding.inspect();
+  if (!health.reachable || funding.funding.chainId !== 1 || !['ready', 'waiting_funds'].includes(funding.funding.phase)) throw new Error('Unfunded daemon acceptance failed.');
   let nativeAccounting = false;
   if (process.env.VEYL_ZKAPI_MANIFEST && JSON.parse(readFileSync(process.env.VEYL_ZKAPI_MANIFEST, 'utf8')).version === 2) {
     const first = await runtime.provider.accountingIdentity(), second = await runtime.provider.accountingIdentity();
     if (first.version !== 1 || !/^[0-9a-f]{32}$/.test(first.journal_id) || first.journal_id !== second.journal_id) throw Error('Native authenticated accounting identity failed.');
     nativeAccounting = true;
   }
+  requireSmokeAccounting(scope, nativeAccounting);
   await registry.tick();
   const auth = new WalletAuth({ origin: 'https://veyl.sh', state: { version: 1, challenges: [], sessions: [] }, save() {} });
   app = createProductionApp({ auth, registry, gateway: new GatewayVerifier({ key: randomBytes(32).toString('hex') }), origin: 'https://veyl.sh', mainnet });
@@ -63,7 +66,7 @@ try {
   const privateRoute = await fetch(local + '/api/state', { signal: AbortSignal.timeout(5000) });
   if (!publicHealth.ok || privateRoute.status !== 403) throw new Error('Production HTTP gateway boundary failed acceptance.');
   const memory = footprint(process.pid);
-  console.log(JSON.stringify({ success: true, directory, health: health.reachable, network: health.network, modelCount: models.length, fundingPhase: funding.funding.phase, workerHeartbeat: !!project.runtimeHeartbeat, nativeAccounting, approvalEnabled: runtime.funding.capabilities().approvalEnabled, gatewayRejectsUnauthenticated: true, memory, totalPssMiB: memory.reduce((n,p) => n + p.pssKiB, 0) / 1024, measurement: 'Unfunded production module, HTTP boundary, native runtime and model catalog only. This does not measure proof-generation or paid-inference peak memory.', paidInferenceCalls: 0, signedTransactions: 0, publicBroadcasts: 0 }));
+  console.log(JSON.stringify({ success: true, ...catalog, directory, health: health.reachable, network: health.network, fundingPhase: funding.funding.phase, workerHeartbeat: !!project.runtimeHeartbeat, nativeAccounting, approvalEnabled: runtime.funding.capabilities().approvalEnabled, gatewayRejectsUnauthenticated: true, memory, totalPssMiB: memory.reduce((n,p) => n + p.pssKiB, 0) / 1024, measurement: scope === 'wallet-recovery' ? 'Unfunded wallet recovery infrastructure, authenticated accounting identity and HTTP boundary only. Model catalog and inference readiness were not checked.' : 'Unfunded production module, HTTP boundary, native runtime and model catalog only. This does not measure proof-generation or paid-inference peak memory.', paidInferenceCalls: 0, signedTransactions: 0, publicBroadcasts: 0 }));
 } finally {
   if (app) await new Promise(r => app.close(r));
   registry.scheduler.stop();
