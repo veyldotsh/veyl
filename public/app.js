@@ -168,7 +168,7 @@ document.addEventListener('submit', async event => {
   } catch (error) { toast(error.message); if (button) button.disabled = false; }
 });
 async function init() {
-  try { if (!await sessionBootstrap()) return; const savedView = new URLSearchParams(location.hash.slice(1)); if (['home','project','jobs','tools','platform'].includes(savedView.get('view'))) view = savedView.get('view'); selected = savedView.get('id'); if (['runtime','market','treasury','memory','deliverables','connections'].includes(savedView.get('tab'))) tab = savedView.get('tab'); await refresh(); const results = await Promise.allSettled([api('/api/models'), api('/api/chain')]);
+  try { if (!await sessionBootstrap()) return; const savedView = new URLSearchParams(location.hash.slice(1)); if (['home','project','jobs','tools','platform'].includes(savedView.get('view'))) view = savedView.get('view'); selected = savedView.get('id'); if (['runtime','market','treasury','memory','deliverables','connections','developer'].includes(savedView.get('tab'))) tab = savedView.get('tab'); await refresh(); const results = await Promise.allSettled([api('/api/models'), api('/api/chain')]);
     if (results[0].status === 'fulfilled') models = results[0].value; else toast(results[0].reason.message);
     if (results[1].status === 'fulfilled') chain = results[1].value;
     $('launch-model').innerHTML = models.length ? models.map(m => `<option value="${esc(m.id)}">${esc(m.id)} · ${money(m.oa_request_limit_micro_usd)} cap${m.oa_accounting_margin_micro_usd ? ` + ${(m.oa_accounting_margin_micro_usd / 1e6).toFixed(3)} USD reserve` : ''}</option>`).join('') : '<option value="pending">Select after runtime setup</option>'; render();

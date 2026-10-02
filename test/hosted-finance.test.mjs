@@ -44,6 +44,113 @@ test('every paid complete checks note expiry again and a changed expiry prevents
   provider.release();
 });
 
+test('unfunded or expired admission rejects before a job, native call or USD reservation exists', async t => {
+  for (const status of ['no_note', 'expired', 'unknown']) {
+    const f = fixture(t); let queued = 0, nativeCalls = 0;
+    f.kit.providerCatalogForProject = async () => [{ id: 'test/model', oa_request_limit_micro_usd: 490000, oa_accounting_margin_micro_usd: 1000 }];
+    f.kit.queue = { assertCapacity: async () => {}, enqueue: async () => { queued++; } };
+    f.runtime.rawProvider.complete = async () => { nativeCalls++; };
+    f.runtime.noteExpiryGuard.assertCanInfer = async () => {
+      assert.equal(f.kit.operations.has(f.project.id), true);
+      assert.equal(f.registry.financeContext.getStore().purpose, 'inference-admission');
+      assert.equal(f.project.committed, 0); assert.equal(f.kit.store.data.jobs.length, 0);
+      const error = new Problem('Fund and activate an unexpired note before submitting.', 409); error.noteExpiry = { status, canInfer: false }; throw error;
+    };
+    await assert.rejects(f.kit.submit(f.project.id, { requestKey: randomUUID(), prompt: 'First task' }), /Fund and activate/);
+    assert.equal(f.project.committed, 0); assert.deepEqual(f.project.days, {}); assert.equal(f.kit.store.data.jobs.length, 0);
+    assert.equal(f.project.accountingJournalId, undefined); assert.equal(queued, 0); assert.equal(nativeCalls, 0);
+    assert.equal(f.runtime.noteExpiry.status, status); assert.equal(f.kit.running, false); assert.equal(f.kit.operations.size, 0); assert.equal(f.registry.financeOwners.size, 0);
+    assert.equal(f.stats().acquisitions, 1); assert.equal(f.stats().released, 1);
+    f.registry.kits.delete(owner); const restored = f.registry.get(owner).project(f.project.id);
+    assert.equal(restored.committed, 0); assert.deepEqual(restored.days, {});
+  }
+});
+
+test('healthy admission reserves once and still rechecks expiry before the actual model call', async t => {
+  const f = fixture(t); let queued = 0;
+  f.kit.providerCatalogForProject = async () => [{ id: 'test/model', oa_request_limit_micro_usd: 490000, oa_accounting_margin_micro_usd: 1000 }];
+  f.kit.queue = { assertCapacity: async () => {}, enqueue: async () => { queued++; } };
+  const input = { requestKey: randomUUID(), prompt: 'Funded task' }, job = await f.kit.submit(f.project.id, input);
+  assert.equal(queued, 1); assert.equal(job.status, 'queued'); assert.equal(f.project.committed, 491000); assert.equal(f.stats().inspections, 1);
+  assert.equal((await f.kit.submit(f.project.id, input)).id, job.id); assert.equal(f.stats().inspections, 1);
+  const provider = await f.registry.executionProvider(owner, f.project.id); f.setSafe(false);
+  await assert.rejects(provider.complete({}), /Expired note/); provider.release();
+  assert.equal(f.stats().calls, 0); assert.equal(f.project.committed, 491000); assert.equal(f.stats().inspections, 2);
+});
+
+test('scheduled admission defers daemon capacity and pauses an unfunded schedule without reservations', async t => {
+  const f = fixture(t);
+  f.kit.providerCatalogForProject = async () => [{ id: 'test/model', oa_request_limit_micro_usd: 490000, oa_accounting_margin_micro_usd: 1000 }];
+  f.kit.queue = { assertCapacity: async () => {}, enqueue: async () => assert.fail('No unfunded job enters the queue') };
+  f.project.schedule = { minutes: 15, prompt: 'Scheduled first task', nextAt: new Date(0).toISOString() }; f.kit.store.save();
+  f.registry.provisioner.acquire = async () => { const error = new Problem('All daemon slots are busy.', 503); error.dispatchDeferred = true; throw error; };
+  await f.kit.tick(); assert.ok(f.project.schedule); assert.ok(new Date(f.project.schedule.nextAt) > new Date());
+  assert.equal(f.project.committed, 0); assert.equal(f.kit.store.data.jobs.length, 0);
+  f.project.schedule.nextAt = new Date(0).toISOString(); f.kit.store.save();
+  f.registry.provisioner.acquire = async () => ({ release() {} });
+  f.runtime.noteExpiryGuard.assertCanInfer = async () => { const error = new Problem('No active private note.', 409); error.noteExpiry = { status: 'no_note', canInfer: false }; throw error; };
+  await f.kit.tick(); assert.equal(f.project.schedule, null); assert.equal(f.project.committed, 0); assert.equal(f.kit.store.data.jobs.length, 0); assert.equal(f.kit.operations.size, 0);
+});
+
+test('healthy admission followed by queue-time expiry releases every untouched swarm stage without a native call identity', async t => {
+  const f = fixture(t), models = [{ id: 'test/model', oa_request_limit_micro_usd: 490000, oa_accounting_margin_micro_usd: 1000 }];
+  f.project.swarm = true; f.project.policy.total = f.project.policy.daily = 2000000; f.kit.store.save();
+  f.kit.providerCatalogForProject = f.runtime.rawProvider.models = async () => models;
+  f.runtime.rawProvider.accountingIdentity = async () => ({ version: 1, journal_id: 'a'.repeat(32) });
+  f.runtime.rawProvider.callSettlement = async () => assert.fail('No native call exists to settle');
+  f.kit.queue = { assertCapacity: async () => {}, enqueue: async () => {} };
+  const input = { requestKey: randomUUID(), prompt: 'Three queued stages' }, job = await f.kit.submit(f.project.id, input);
+  assert.equal(f.project.committed, 1473000); f.setSafe(false);
+  await f.kit.runQueued(job.id);
+  assert.equal(job.status, 'interrupted'); assert.equal(job.reservation, 0); assert.equal(f.project.committed, 0); assert.equal(f.stats().calls, 0);
+  assert.deepEqual(job.steps.map(step => step.status), ['not-dispatched', 'not-dispatched', 'not-dispatched']);
+  assert.ok(job.steps.every(step => step.callAccounting === undefined)); assert.equal(f.project.accountingJournalId, undefined);
+  assert.equal((await f.kit.submit(f.project.id, input)).id, job.id); assert.equal(f.project.committed, 0);
+  f.registry.kits.delete(owner); const restored = f.registry.get(owner);
+  assert.equal(restored.project(f.project.id).committed, 0); assert.equal(restored.store.data.jobs[0].reservation, 0);
+});
+
+test('expiry before a later swarm stage or tool round releases only untouched stages and never an attempted cap', async t => {
+  for (const toolRound of [false, true]) {
+    const f = fixture(t), models = [{ id: 'test/model', oa_request_limit_micro_usd: 490000, oa_accounting_margin_micro_usd: 1000 }]; let nativeCalls = 0;
+    f.project.swarm = true; f.project.policy.total = f.project.policy.daily = 2000000; f.kit.store.save();
+    f.kit.providerCatalogForProject = f.runtime.rawProvider.models = async () => models;
+    f.kit.queue = { assertCapacity: async () => {}, enqueue: async () => {} };
+    f.runtime.rawProvider.accountingIdentity = async () => ({ version: 1, journal_id: 'a'.repeat(32) });
+    f.runtime.rawProvider.callSettlement = async () => { throw new Error('Uncertain receipt stays held'); };
+    f.runtime.rawProvider.complete = async () => {
+      nativeCalls++; f.setSafe(false);
+      return toolRound ? { answer: '', toolCalls: [{ id: 'read', function: { name: 'read_source', arguments: '{}' } }] } : { answer: 'First stage completed' };
+    };
+    if (toolRound) f.kit.agentTools = { schemas: () => [], execute: async () => ({ text: 'Read-only fixture' }) };
+    const input = { requestKey: randomUUID(), prompt: 'Stop after one attempted call' }, job = await f.kit.submit(f.project.id, input);
+    await f.kit.runQueued(job.id);
+    assert.equal(job.status, 'interrupted'); assert.equal(nativeCalls, 1); assert.equal(job.reservation, 491000); assert.equal(f.project.committed, 491000);
+    assert.equal(job.steps[0].callAccounting.status, 'pending'); assert.equal(job.steps[0].additionalCalls, undefined);
+    assert.deepEqual(job.steps.slice(1).map(step => step.status), ['not-dispatched', 'not-dispatched']);
+    assert.equal((await f.kit.submit(f.project.id, input)).id, job.id); assert.equal(f.project.committed, 491000);
+    f.registry.kits.delete(owner); const restored = f.registry.get(owner);
+    assert.equal(restored.project(f.project.id).committed, 491000); assert.equal(restored.pendingAccounting(f.project.id), 1);
+  }
+});
+
+test('locally admitted callback is one-use and provider errors cannot masquerade as a local readiness release', async t => {
+  const f = fixture(t), provider = await f.registry.executionProvider(owner, f.project.id), complete = await provider.prepareComplete();
+  await complete({}); assert.throws(() => complete({}), /already attempted/); assert.equal(f.stats().calls, 1); provider.release();
+  const models = [{ id: 'test/model', oa_request_limit_micro_usd: 490000, oa_accounting_margin_micro_usd: 1000 }];
+  f.kit.providerCatalogForProject = f.runtime.rawProvider.models = async () => models;
+  f.kit.queue = { assertCapacity: async () => {}, enqueue: async () => {} };
+  f.runtime.rawProvider.accountingIdentity = async () => ({ version: 1, journal_id: 'a'.repeat(32) });
+  f.runtime.rawProvider.callSettlement = async () => { throw new Error('Missing remote receipt'); };
+  f.runtime.rawProvider.complete = async () => { const error = new Problem('Local funding readiness stopped this task.', 409); error.noteExpiry = { status: 'no_note' }; error.notDispatched = true; throw error; };
+  const job = await f.kit.submit(f.project.id, { requestKey: randomUUID(), prompt: 'Remote error flags are not authority' }); await f.kit.runQueued(job.id);
+  assert.equal(job.reservation, 491000); assert.equal(f.project.committed, 491000); assert.equal(job.steps[0].status, 'uncertain'); assert.ok(job.steps[0].callAccounting);
+  job.steps[0].status = 'not-dispatched'; job.reservation = 0; f.project.committed = 0; f.project.days[job.day] = 0;
+  assert.throws(() => f.kit.store.save(), /Persistence failed/);
+  f.registry.kits.delete(owner); const restored = f.registry.get(owner);
+  assert.equal(restored.project(f.project.id).committed, 491000); assert.equal(restored.store.data.jobs[0].steps[0].status, 'uncertain');
+});
+
 test('failed runtime construction releases both acquired daemon and financial exclusion', async t => {
   const f = fixture(t); f.registry.runtime = () => { throw new Error('Corrupt journal'); };
   await assert.rejects(f.registry.executionProvider(owner, f.project.id), /Corrupt journal/);

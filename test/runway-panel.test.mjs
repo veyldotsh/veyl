@@ -23,7 +23,7 @@ test('expiry display fails closed for unknown evidence and ages a cached healthy
   assert.equal(noteExpiryView({status:'no_note'},NOW).status,'no_note');
 });
 async function settled(p){for(let i=0;i<100;i++){if(!p.isBusy())return;await new Promise(r=>setImmediate(r));}throw Error('Still busy');}
-function fixture(overrides={}){let sends=0;const saved=storage(),s=snapshot();const client={transactionsEnabled:true,busy:false,storage:saved,wallet:{ensure:async a=>a,send:async()=>{sends++;return HASH;}}};const api=async(path,body)=>({id:body.refillId,status:'funded',transactionHash:body.transactionHash});return{s,client,saved,api,sends:()=>sends,...overrides};}
+function fixture(overrides={}){let sends=0;const saved=storage(),s=snapshot();const client={transactionsEnabled:true,capabilities:async()=>({transactionsEnabled:true}),busy:false,storage:saved,wallet:{ensure:async a=>a,send:async()=>{sends++;return HASH;}}};const api=async(path,body)=>({id:body.refillId,status:'funded',transactionHash:body.transactionHash});return{s,client,saved,api,sends:()=>sends,...overrides};}
 test('ETH conversion stays exact and rejects exponents, negative or excess precision',()=>{assert.equal(ethToWei('0.000000000000000001'),'1');assert.equal(ethToWei('1.234567890123456789'),'1234567890123456789');for(const s of ['1e3','-1','01','0.0000000000000000001'])assert.throws(()=>ethToWei(s));});
 test('runway validates exact treasury calldata, recipient, amount, chain and project ownership',()=>{const s=snapshot();assert.equal(checkedRunway(s,project,OWNER),s);for(const mutate of [v=>v.policy.owner=OTHER,v=>v.policy.projectId=randomUUID(),v=>v.refills[0].calls[1].to=OTHER,v=>v.refills[0].calls[1].value='0x1',v=>v.refills[0].amountWei='1',v=>v.refills[0].fundingAddress=OTHER,v=>v.refills[0].calls[0].chainId='0x89']){const changed=structuredClone(s);mutate(changed);assert.throws(()=>checkedRunway(changed,project,OWNER));}});
 test('wallet payment needs both enablement and exact review before any send',async()=>{const f=fixture(),w=new RunwayWalletClient({project,owner:OWNER,...f});for(const opts of [{enabled:false,reviewed:true},{enabled:true,reviewed:false}])await assert.rejects(w.send(f.s,f.s.refills[0].id,opts));f.client.transactionsEnabled=false;await assert.rejects(w.send(f.s,f.s.refills[0].id,{enabled:true,reviewed:true}));assert.equal(f.sends(),0);});
@@ -33,6 +33,20 @@ test('unknown wallet submission never retries, while an explicit wallet rejectio
 test('finalized confirmation must match exact refill and hash before clearing browser recovery',async()=>{const f=fixture(),w=new RunwayWalletClient({project,owner:OWNER,...f});w.save([{refillId:f.s.refills[0].id,transactionHash:HASH}]);w.api=async()=>({id:randomUUID(),status:'funded',transactionHash:HASH});await assert.rejects(w.confirm(f.s.refills[0].id,HASH));assert.equal(w.pending().length,1);w.api=f.api;await w.confirm(f.s.refills[0].id,HASH);assert.equal(w.pending().length,0);});
 test('backend quotes cannot redirect recovery to unrelated destinations',()=>{const f=funding();checkedFunding(f,OWNER,project);f.operations[0].request.destination=OTHER;assert.throws(()=>checkedFunding(f,OWNER,project));});
 test('local panel never calls private funding endpoints',async()=>{const e=new Element();let called=false;const p=mountRunwayPanel(e,{project,api:async()=>{called=true;}});await p.ready;assert.equal(called,false);assert.match(e.innerHTML,/Local development ETH/);p.destroy();assert.equal(e.handlers.size,0);});
+test('opening Treasury directly verifies its own permission gate without requiring a prior Market visit',async()=>{
+ const e=new Element(),f=fixture(),calls=[];f.client.transactionsEnabled=false;
+ f.client.capabilities=async id=>{calls.push(id);return{transactionsEnabled:true};};
+ const p=mountRunwayPanel(e,{project,owner:OWNER,hosted:true,client:f.client,capabilities:{transactionsEnabled:true},api:async path=>path.endsWith('/runway')?f.s:funding(),now:()=>NOW});
+ await p.ready;assert.deepEqual(calls,[project.id]);assert.equal(f.client.transactionsEnabled,true);assert.equal(f.sends(),0);
+ f.client.capabilities=async()=>{throw Error('provider-private-detail');};await p.refresh();
+ assert.equal(f.client.transactionsEnabled,false);assert.match(e.innerHTML,/Wallet permissions could not be refreshed/);assert.doesNotMatch(e.innerHTML,/provider-private-detail/);p.destroy();
+});
+test('a late Treasury capability read cannot enable another view after navigation',async()=>{
+ const e=new Element(),f=fixture();let finish;f.client.transactionsEnabled=false;f.client.capabilities=()=>new Promise(resolve=>{finish=resolve;});
+ const p=mountRunwayPanel(e,{project,owner:OWNER,hosted:true,client:f.client,capabilities:{transactionsEnabled:true},api:async path=>path.endsWith('/runway')?f.s:funding(),now:()=>NOW});
+ await new Promise(resolve=>setImmediate(resolve));p.destroy();e.innerHTML='Another view';finish({transactionsEnabled:true});await p.ready;
+ assert.equal(f.client.transactionsEnabled,false);assert.equal(e.innerHTML,'Another view');
+});
 test('automatic refill and expiry closure require independent owner opt-ins and all capabilities',async()=>{
  for(const [available,automatic,close,expectedCalls] of [[false,true,true,0],[true,false,true,1],[true,true,false,1],[true,true,true,1]]) {
   const e=new Element(),f=fixture(),s=f.s,calls=[];s.refills=[];s.capabilities={automaticAvailable:available,operator:OWNER};

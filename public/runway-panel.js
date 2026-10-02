@@ -147,10 +147,14 @@ export function mountRunwayPanel(element, { project, owner, hosted = false, api,
   }
   async function read() {
     const token = ++generation;
-    const [r, f] = await Promise.allSettled([api(`${base}/runway`), api(`${base}/funding`)]);
+    if (client) client.transactionsEnabled = false;
+    const [r, f, permission] = await Promise.allSettled([api(`${base}/runway`), api(`${base}/funding`), Promise.resolve().then(() => client?.capabilities?.(project.id))]);
     if (!current() || token !== generation) return;
     if (f.status === 'fulfilled') funding = checkedFunding(f.value, owner, project); else throw f.reason;
     if (r.status === 'fulfilled') runway = checkedRunway(r.value, project, owner); else { runway = null; error = r.reason.message; }
+    const permissionVerified = permission.status === 'fulfilled' && typeof permission.value?.transactionsEnabled === 'boolean';
+    if (!permissionVerified) error = 'Wallet permissions could not be refreshed. Signing stays disabled; saved state and recovery remain available.';
+    if (client) client.transactionsEnabled = capabilities.transactionsEnabled === true && permissionVerified && permission.value.transactionsEnabled === true && !!runway;
   }
   async function act(fn) {
     if (!current() || busy) return; busy = true; error = ''; render();

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateMarketSnapshot, renderMarketSnapshot, mountPublicMarket } from '../public/market.js';
+import { mountAmbientMotion } from '../public/ambient.js';
 
 const address = digit => '0x' + digit.repeat(40);
 function snapshot() {
@@ -102,16 +103,48 @@ test('public market is discoverable across pages and opens the wallet workspace 
   assert.equal(snapshot().token.toLowerCase(), publicRecord.token.address.toLowerCase());
 });
 
-test('the shared visual background is local, passive and motion-free on mobile or reduced-motion settings', () => {
-  for (const name of ['site', 'docs', 'developers', 'brand', 'market', 'index']) {
+test('the shared folds stay behind content, move gently on mobile and stop for reduced motion', () => {
+  for (const name of ['site', 'docs', 'developers', 'brand', 'market', 'index', 'oauth-callback']) {
     const html = readFileSync(new URL(`../public/${name}.html`, import.meta.url), 'utf8');
     assert.match(html, /<link rel="stylesheet" href="\/ambient.css">/);
+    assert.match(html, /<script type="module" src="\/ambient.js"><\/script>/);
   }
   const css = readFileSync(new URL('../public/ambient.css', import.meta.url), 'utf8'), svg = readFileSync(new URL('../public/ambient-fold.svg', import.meta.url), 'utf8');
   assert.match(css, /pointer-events:none/); assert.match(css, /z-index:-1/);
-  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{body::before\{animation:none;transform:none/);
-  assert.match(css, /@media\(max-width:760px\)\{body::before\{[^}]*animation:none/);
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\s*body::before,body::after\{animation:none/);
+  assert.match(css, /animation-name:veyl-fold-front-mobile;animation-duration:26s/);
+  assert.match(css, /animation-name:veyl-fold-back-mobile;animation-duration:33s/);
+  assert.match(css, /html\[data-veyl-motion="paused"\][^{]+\{animation-play-state:paused/);
+  assert.match(css, /button\.veyl-motion-control\{all:unset/);
   assert.doesNotMatch(css, /\b(?:filter|backdrop-filter|will-change):/);
   assert.doesNotMatch(svg, /<script|<foreignObject|<filter|href=|onload=/i);
   assert.ok(Buffer.byteLength(svg) < 4096);
+});
+
+function motionFixture({ stored = null, reduce = false, blockedStorage = false, hidden = false } = {}) {
+  const events = new Map(), mediaEvents = new Map(), docEvents = new Map(), storage = new Map(stored ? [['veyl:background-motion', stored]] : []);
+  const children = [], media = { matches: reduce, addEventListener: (name, handler) => mediaEvents.set(name, handler) };
+  const doc = { hidden, documentElement: { dataset: {} }, querySelector: () => children[0], createElement: () => ({ ...new Element(), attributes: new Map(), handlers: new Map(), dataset: {}, setAttribute: Element.prototype.setAttribute, addEventListener: Element.prototype.addEventListener }), body: { append: item => children.push(item) }, addEventListener: (name, handler) => docEvents.set(name, handler) };
+  const win = { matchMedia: () => media, addEventListener: (name, handler) => events.set(name, handler), localStorage: { getItem: key => { if (blockedStorage) throw Error('denied'); return storage.get(key); }, setItem: (key, value) => { if (blockedStorage) throw Error('denied'); storage.set(key, value); } } };
+  const button = mountAmbientMotion(doc, win);
+  return { doc, win, media, button, storage, events, docEvents, mediaEvents, children };
+}
+
+test('motion pause is accessible, saved across pages and synchronized between tabs', () => {
+  const f = motionFixture();
+  assert.equal(f.button.type, 'button'); assert.equal(f.button.attributes.get('aria-label'), 'Background motion'); assert.equal(f.button.attributes.get('aria-pressed'), 'true');
+  f.button.handlers.get('click')(); assert.equal(f.doc.documentElement.dataset.veylMotion, 'paused'); assert.equal(f.button.attributes.get('aria-pressed'), 'false'); assert.equal(f.storage.get('veyl:background-motion'), 'paused');
+  assert.equal(motionFixture({ stored: 'paused' }).doc.documentElement.dataset.veylMotion, 'paused');
+  f.events.get('storage')({ key: 'veyl:background-motion', newValue: 'active' }); assert.equal(f.doc.documentElement.dataset.veylMotion, 'active');
+  mountAmbientMotion(f.doc, f.win); assert.equal(f.children.length, 1);
+});
+
+test('motion respects device settings, pauses hidden tabs and survives unavailable storage', () => {
+  const f = motionFixture({ stored: 'active', reduce: true });
+  assert.equal(f.doc.documentElement.dataset.veylMotion, 'paused'); assert.equal(f.button.disabled, true);
+  f.button.handlers.get('click')(); assert.equal(f.storage.get('veyl:background-motion'), 'active');
+  f.media.matches = false; f.mediaEvents.get('change')(); assert.equal(f.doc.documentElement.dataset.veylMotion, 'active'); assert.equal(f.button.disabled, false);
+  f.doc.hidden = true; f.docEvents.get('visibilitychange')(); assert.equal(f.doc.documentElement.dataset.veylInactive, '');
+  f.doc.hidden = false; f.docEvents.get('visibilitychange')(); assert.equal(Object.hasOwn(f.doc.documentElement.dataset, 'veylInactive'), false);
+  const blocked = motionFixture({ blockedStorage: true }); blocked.button.handlers.get('click')(); assert.equal(blocked.doc.documentElement.dataset.veylMotion, 'paused');
 });

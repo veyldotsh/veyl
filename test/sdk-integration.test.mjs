@@ -8,6 +8,7 @@ import { VeylClient, VeylApiError } from '../packages/veyl/client.mjs';
 import { WalletAuth } from '../src/auth.mjs';
 import { GatewayVerifier, signGateway } from '../src/gateway-auth.mjs';
 import { TenantRegistry, createProductionApp } from '../src/production.mjs';
+import { Problem } from '../src/agent.mjs';
 
 test('distributable SDK works against real scoped HTTP routes, queue idempotency, memory and revocation', async t => {
   const directory = mkdtempSync(resolve(tmpdir(), 'veyl-sdk-integration-'));
@@ -30,6 +31,10 @@ test('distributable SDK works against real scoped HTTP routes, queue idempotency
   } });
   assert.equal((await client.project()).project.id, project.id); assert.equal((await client.models()).models[0].id, 'fixture/model');
   const requestKey = randomUUID(), input = { requestKey, prompt: 'Queue a fixture task' };
+  registry.inferenceAdmission = async () => { throw new Problem('No active private note.', 409); };
+  await assert.rejects(client.submitJob(input), error => error.status === 409 && !error.uncertain);
+  assert.equal(project.committed, 0); assert.equal(kit.store.data.jobs.length, 0);
+  registry.inferenceAdmission = async () => ({ status: 'healthy', canInfer: true }); // Explicit funded fixture only.
   const first = await client.submitJob(input), repeated = await client.submitJob(input); assert.equal(first.job.id, repeated.job.id);
   assert.equal(project.committed, 1000); assert.equal((await client.jobs({ requestKey })).jobs[0].id, first.job.id); assert.equal((await client.job(first.job.id)).artifact, null);
   await assert.rejects(client.submitJob({ ...input, prompt: 'Changed request' }), e => e.status === 409 && !e.uncertain);

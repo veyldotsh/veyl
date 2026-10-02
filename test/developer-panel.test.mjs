@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createContext, runInContext } from 'node:vm';
+import { randomUUID } from 'node:crypto';
 import { mountDeveloperPanel } from '../public/developer-panel.js';
 const token = 'veyl_sk_' + 'c'.repeat(64);
 function element() {
@@ -55,4 +57,19 @@ test('developer UI never persists a token and source wiring provides isolated cl
   assert.equal((ui.match(/clipboard\.writeText/g) || []).length, 1); assert.match(ui, /action === 'copy'/);
   const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'); assert.match(app, /developerPanel\?\.destroy/); assert.match(app, /data-developer-form/);
   const server = readFileSync(new URL('../src/server.mjs', import.meta.url), 'utf8'); assert.match(server, /developer-panel\.js/); assert.match(server, /developer-panel\.css/); assert.match(server, /developers\.html/);
+});
+
+test('refreshing a bookmarked Developer tab restores the same project token controls', async () => {
+  const elements = new Map();
+  const context = createContext({ document: { getElementById(id) { if (!elements.has(id)) elements.set(id, { addEventListener() {}, style: {} }); return elements.get(id); }, addEventListener() {}, querySelectorAll: () => [] }, crypto: { randomUUID }, setInterval() {}, sessionBootstrap: async () => false, location: { hash: '#view=project&id=agent-one&tab=developer', search: '' }, URLSearchParams, Intl });
+  runInContext(readFileSync(new URL('../public/app.js', import.meta.url), 'utf8'), context);
+  await runInContext(`
+    sessionBootstrap = async () => true;
+    state = { templates: {} };
+    refresh = async () => {};
+    api = async path => path === '/api/models' ? [] : {};
+    render = () => { observed = { view, selected, tab }; };
+    init();
+  `, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.observed)), { view: 'project', selected: 'agent-one', tab: 'developer' });
 });

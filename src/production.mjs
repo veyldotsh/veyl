@@ -157,6 +157,18 @@ export class TenantRegistry {
       this.modelCatalog = { at: Date.now(), models }; return structuredClone(models);
     } catch (error) { if (this.modelCatalog && Date.now() - this.modelCatalog.at < 900000) return structuredClone(this.modelCatalog.models); throw error; }
   }
+  async inferenceAdmission(owner, projectId) {
+    try {
+      return await this.financialOperation(owner, projectId, () => this.provisioner.withRuntime(owner, projectId, async () => {
+        const runtime = this.runtime(owner, projectId);
+        try { runtime.noteExpiry = await runtime.noteExpiryGuard.assertCanInfer(); return runtime.noteExpiry; }
+        catch (error) { if (error.noteExpiry) runtime.noteExpiry = error.noteExpiry; throw error; }
+      }), 'inference-admission');
+    } catch (error) {
+      if (error?.dispatchDeferred === true) error.admissionDeferred = true;
+      throw error;
+    }
+  }
   async executionProvider(owner, projectId) {
     this.resources.assertCapacity();
     const kit = this.get(owner);
@@ -167,10 +179,23 @@ export class TenantRegistry {
       if (!this.configuration.data.projects.some(p => p.owner.toLowerCase() === owner.toLowerCase() && p.projectId === projectId)) await this.prepareProject(owner, kit.project(projectId));
       lease = await this.provisioner.acquire(owner, projectId);
       const runtime = this.runtime(owner, projectId), raw = runtime.rawProvider;
-      return { mode: raw.mode, models: raw.models.bind(raw), accountingIdentity: () => raw.accountingIdentity(), callSettlement: callId => raw.callSettlement(callId), complete: async (input, accountingContext) => {
+      const checkReady = async () => {
         this.resources.assertCapacity();
         try { runtime.noteExpiry = await runtime.noteExpiryGuard.assertCanInfer(); }
         catch (error) { if (error.noteExpiry) runtime.noteExpiry = error.noteExpiry; throw error; }
+      };
+      return { mode: raw.mode, models: raw.models.bind(raw), accountingIdentity: () => raw.accountingIdentity(), callSettlement: callId => raw.callSettlement(callId),
+        prepareComplete: async () => {
+          // Trusted local gate, while this lease and finance exclusion remain
+          // held. A one-use callback permits durable call recording after the
+          // guard and before raw dispatch, without a second pre-send failure.
+          await checkReady(); let used = false;
+          return (input, accountingContext) => {
+            if (used) throw new Problem('This locally admitted model call was already attempted.', 409);
+            used = true; return raw.complete(input, accountingContext);
+          };
+        }, complete: async (input, accountingContext) => {
+        await checkReady();
         return raw.complete(input, accountingContext);
       }, release };
     } catch (error) { release(); throw error; }
@@ -334,7 +359,7 @@ export class TenantRegistry {
     const provider = new UnconfiguredProvider();
     const chain = { status: async () => ({ available: true, chainId: 1, mode: 'wallet', transactions: 'user-signed', account: getAddress(owner) }) };
     const kit = new Kit({ store, provider, chain, now: this.now, providerForProject: p => this.executionProvider(owner, p.id), providerCatalogForProject: p => this.catalog(owner, p.id),
-      fundingForProject: async p => (await this.ready(owner, p.id)).funding, agentTools: new AgentTools({ client: this.mainnet?.client }), prepareSocialDraft: (project, input) => this.social(owner, project.id).draft(input) });
+      fundingForProject: async p => (await this.ready(owner, p.id)).funding, beforeAdmission: p => this.inferenceAdmission(owner, p.id), agentTools: new AgentTools({ client: this.mainnet?.client }), prepareSocialDraft: (project, input) => this.social(owner, project.id).draft(input) });
     kit.queue = { assertCapacity: () => { this.resources.assertCapacity(); return this.scheduler.assertCapacity(owner); }, enqueue: input => { const entry = this.scheduler.enqueue({ owner, ...input }); setImmediate(() => this.scheduler.tick().catch(() => {})); return entry; } };
     // Hooks are explicit rather than selecting a daemon from untrusted request data.
     kit.providerForProject = p => this.executionProvider(owner, p.id);

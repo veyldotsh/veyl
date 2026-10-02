@@ -21,3 +21,18 @@ h2{font:normal clamp(30px,3vw,44px)/1.12 'KitSerif',Georgia,serif;letter-spacing
 @media(max-width:390px){.nav-links{display:none}.hero-buttons{gap:15px}.hero-buttons .text-link{font-size:11px}.launch-hero h1{font-size:45px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important;animation:none!important}}
 @media(max-width:760px){.veil-art img{position:absolute;right:0;width:185%;max-width:none;object-position:right center}.hero-description br:after{content:' '}.landing .nav-links{display:none}}
+
+/* Slow opposing folds give the banner depth without changing its footprint. */
+.veil-art img{transform:scale(1.06);transform-origin:80% 55%;animation:veyl-hero-drift 17s ease-in-out -4s infinite alternate}
+.veil-art::after{content:"";position:absolute;inset:-15%;pointer-events:none;background:url('/ambient-fold.svg') 80% 50%/auto 150% no-repeat;opacity:.15;transform:translate3d(12px,-7px,0) rotate(-7deg);animation:veyl-hero-fold 23s ease-in-out -12s infinite alternate}
+.veil-art>span{z-index:1}
+@keyframes veyl-hero-drift{from{transform:scale(1.06) translate3d(0,-3px,0)}to{transform:scale(1.12) translate3d(-13px,4px,0)}}
+@keyframes veyl-hero-fold{from{transform:translate3d(12px,-7px,0) rotate(-7deg)}to{transform:translate3d(-23px,10px,0) rotate(6deg)}}
+.landing .primary-link{transition:background .2s,transform .2s,box-shadow .2s}
+.landing .primary-link:hover{transform:translateY(-2px);box-shadow:0 5px 14px #182a2112}
+.landing .primary-link>span,.landing .nav-cta>span{display:inline-block;transition:transform .2s}
+.landing .primary-link:hover>span,.landing .nav-cta:hover>span{transform:translate(2px,-2px)}
+.quick-flow li>span{transition:color .2s,transform .2s}
+.quick-flow li:hover>span{color:#35553b;transform:translateY(-2px)}
+@media(max-width:760px){.veil-art img{animation-duration:23s}.veil-art::after{animation-duration:29s;opacity:.1}}
+@media(prefers-reduced-motion:reduce){.veil-art img,.veil-art::after{animation:none}.landing .primary-link:hover,.landing .primary-link:hover>span,.landing .nav-cta:hover>span,.quick-flow li:hover>span{transform:none}}

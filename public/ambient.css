@@ -1,13 +1,46 @@
-/* The banner's folded green form, kept behind every readable surface. */
-body{position:relative;isolation:isolate;min-height:100vh;--ambient-min:.10;--ambient-max:.15}
-body::before{content:"";position:fixed;inset:-4vh -4vw;z-index:-1;pointer-events:none;background:url('/ambient-fold.svg') right center/auto 112% no-repeat;opacity:.12;transform-origin:85% 55%;animation:veyl-ambient-fold 38s ease-in-out infinite alternate}
-body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(90deg,rgba(244,243,233,.65) 0%,rgba(244,243,233,.35) 48%,rgba(244,243,233,0) 85%)}
-body:has(.main-shell){--ambient-min:.06;--ambient-max:.10}
-body:has(.main-shell)::before{opacity:.09}
-body:has(.main-shell)::after{background:linear-gradient(90deg,rgba(246,247,243,.7),rgba(246,247,243,.2))}
-.site-nav,.site-footer{background:rgba(244,243,233,.68)}
-.market-stats{background:rgba(244,243,233,.8)}
-@keyframes veyl-ambient-fold{from{transform:translate3d(0,-8px,0) rotate(-1deg);opacity:var(--ambient-min)}to{transform:translate3d(-24px,12px,0) rotate(1deg);opacity:var(--ambient-max)}}
-@media(max-width:760px){body::before{inset:0;background-size:auto 100%;background-position:72% center;opacity:.09;animation:none}body::after{background:rgba(244,243,233,.15)}.documentation .nav-links,.identity .nav-links{display:flex}.documentation .nav-links>a:not([href="/market"]),.identity .nav-links>a:not([href="/market"]){display:none}.documentation .nav-links>a[href="/market"],.identity .nav-links>a[href="/market"]{display:inline-block}}
-@media(prefers-reduced-motion:reduce){body::before{animation:none;transform:none;opacity:.10}}
-@media print{body::before,body::after{display:none}}
+/* Two paper folds share the viewport, moving on different paths and tempos. */
+body{position:relative;isolation:isolate;min-height:100vh;--fold-front:.21;--fold-back:.12}
+body::before,body::after{content:"";position:fixed;inset:-14vh -14vw;z-index:-1;pointer-events:none;background-image:url('/ambient-fold.svg');background-repeat:no-repeat;transform-origin:50% 54%}
+body::before{background-position:94% 48%;background-size:auto 116%;opacity:var(--fold-front);transform:translate3d(3vw,-3vh,0) rotate(-6deg) scale(1.03);animation:veyl-fold-front 22s cubic-bezier(.42,0,.58,1) -7s infinite alternate}
+body::after{background-position:90% 60%;background-size:auto 101%;opacity:var(--fold-back);transform:translate3d(-4vw,5vh,0) rotate(168deg) scale(1.08);animation:veyl-fold-back 29s cubic-bezier(.42,0,.58,1) -18s infinite alternate}
+body:has(.main-shell){--fold-front:.16;--fold-back:.09}
+.site-nav,.site-footer{background:rgba(244,243,233,.76)}
+.market-stats{background:rgba(244,243,233,.88)}
+/* Public-page copy keeps contrast as either fold passes behind it. */
+:is(.landing,.documentation,.identity,.market-page){--muted:#354b34}
+:is(.landing,.documentation,.identity,.market-page) :is(p,li,small,dt,.section-number,.nav-links,.text-link,.token-address,.docs-eyebrow,.docs-topic-number,.docs-nav>a,.docs-nav>span,.docs-end>span,.site-footer>div,.site-footer>div>span){color:#354b34}
+@keyframes veyl-fold-front{0%{transform:translate3d(3vw,-3vh,0) rotate(-6deg) scale(1.03)}50%{transform:translate3d(-2vw,2vh,0) rotate(0deg) scale(1.08)}100%{transform:translate3d(-7vw,6vh,0) rotate(6deg) scale(1.03)}}
+@keyframes veyl-fold-back{0%{transform:translate3d(-4vw,5vh,0) rotate(168deg) scale(1.08)}50%{transform:translate3d(1vw,-1vh,0) rotate(176deg) scale(1.02)}100%{transform:translate3d(6vw,-6vh,0) rotate(184deg) scale(1.08)}}
+
+/* A self-contained control, unaffected by workspace button styles. */
+button.veyl-motion-control{all:unset;box-sizing:border-box;position:fixed;right:16px;bottom:16px;right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));z-index:8;display:grid;place-items:center;width:44px;height:44px;color:#34533d;background:#f4f3e9;border:1px solid #cad5be;border-radius:50%;box-shadow:0 3px 12px #182a210b;cursor:pointer;transition:background .18s,border-color .18s}
+button.veyl-motion-control:hover{background:#e5ebdb;border-color:#809674}
+button.veyl-motion-control:focus-visible{outline:2px solid #35553b;outline-offset:4px}
+button.veyl-motion-control:disabled{cursor:default;opacity:1;color:#6d7b65}
+.veyl-motion-control svg{display:block;width:15px;height:15px;fill:currentColor}
+.veyl-motion-control .motion-start{display:none}
+.veyl-motion-control[aria-pressed="false"] .motion-stop{display:none}
+.veyl-motion-control[aria-pressed="false"] .motion-start{display:block}
+.veyl-motion-control::after{content:attr(data-tip);position:absolute;right:53px;width:max-content;max-width:calc(100vw - 94px);background:#182a21;color:#f4f3e9;padding:6px 10px;border-radius:3px;font:10px/1.5 system-ui,sans-serif;opacity:0;pointer-events:none;transition:opacity .18s}
+.veyl-motion-control:hover::after,.veyl-motion-control:focus-visible::after{opacity:1}
+html[data-veyl-motion="paused"] body::before,html[data-veyl-motion="paused"] body::after,html[data-veyl-inactive] body::before,html[data-veyl-inactive] body::after{animation-play-state:paused}
+html[data-veyl-motion="paused"] .veil-art img,html[data-veyl-motion="paused"] .veil-art::after,html[data-veyl-inactive] .veil-art img,html[data-veyl-inactive] .veil-art::after{animation-play-state:paused}
+
+@media(max-width:760px){
+  body{--fold-front:.16;--fold-back:.085}
+  body::before,body::after{inset:-12vh -28vw}
+  body::before{background-size:auto 104%;background-position:76% center;animation-name:veyl-fold-front-mobile;animation-duration:26s}
+  body::after{background-size:auto 88%;background-position:84% center;animation-name:veyl-fold-back-mobile;animation-duration:33s}
+  @keyframes veyl-fold-front-mobile{from{transform:translate3d(5vw,-2vh,0) rotate(-4deg)}to{transform:translate3d(-6vw,3vh,0) rotate(4deg)}}
+  @keyframes veyl-fold-back-mobile{from{transform:translate3d(-4vw,3vh,0) rotate(171deg)}to{transform:translate3d(4vw,-3vh,0) rotate(181deg)}}
+  button.veyl-motion-control{right:12px;bottom:max(12px,env(safe-area-inset-bottom))}
+  .documentation .nav-links,.identity .nav-links{display:flex}
+  .documentation .nav-links>a:not([href="/market"]),.identity .nav-links>a:not([href="/market"]){display:none}
+  .documentation .nav-links>a[href="/market"],.identity .nav-links>a[href="/market"]{display:inline-block}
+}
+@media(prefers-reduced-motion:reduce){
+  body::before,body::after{animation:none}
+  .veil-art img,.veil-art::after{animation:none!important}
+  button.veyl-motion-control,.veyl-motion-control::after{transition:none}
+}
+@media print{body::before,body::after,button.veyl-motion-control{display:none}}

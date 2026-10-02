@@ -51,6 +51,7 @@ async function apiFixture(t) {
   const project = create(kit, 'API project'), sibling = create(kit, 'Sibling private'), foreign = create(foreignKit, 'Other owner private');
   registry.catalog = async (_owner, id) => { assert.equal(id, project.id); return [{ id: 'fixture/model', oa_request_limit_micro_usd: 1000 }]; };
   kit.providerCatalogForProject = async () => [{ id: 'fixture/model', oa_request_limit_micro_usd: 1000 }]; registry.scheduler.tick = async () => {};
+  registry.inferenceAdmission = async () => ({ status: 'healthy', canInfer: true }); // Fixture note; no daemon or paid call.
   let publications = 0, drafted = [];
   registry.social = (who, id) => { assert.equal(who.toLowerCase(), account.address.toLowerCase()); assert.equal(id, project.id); return { snapshot: () => ({ outbox: drafted }), draft: async body => { const item = { id: randomUUID(), status: 'draft', preview: body }; drafted.push(item); return item; }, publish: () => { publications++; assert.fail('Developer tokens cannot publish'); } }; };
   const app = createProductionApp({ auth, registry, gateway: new GatewayVerifier({ key: gatewayKey }), origin, mainnet: {} });

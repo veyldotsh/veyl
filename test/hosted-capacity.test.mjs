@@ -46,6 +46,7 @@ test('tenant cache preserves encrypted state and cannot evict active request pin
 test('unloaded queued owner executes once after scheduler makes its live dispatch durable', async t => {
   const r = registry(t), kit = r.get(alice), project = kit.create(input()); let executions = 0, releases = 0;
   r.catalog = async () => models;
+  r.inferenceAdmission = async () => ({ status: 'healthy', canInfer: true }); // Explicit funded fixture.
   r.executionProvider = async () => ({ mode: 'zkapi', models: async () => models, complete: async () => { executions++; return { answer: 'Completed after cache eviction', verification: 'fixture' }; }, release: () => releases++ });
   const job = await kit.submit(project.id, { requestKey: randomUUID(), prompt: 'Run after eviction.' });
   r.get(bob); assert.equal(r.kits.has(alice), false);
@@ -58,11 +59,13 @@ test('unloaded queued owner executes once after scheduler makes its live dispatc
 test('queued work survives worker restart but a prior durable running dispatch never retries', async t => {
   const path = directory(t), key = randomBytes(32), options = { directory: path, key, mainnet: {}, maxLoadedTenants: 1 };
   const first = new TenantRegistry(options), kit = first.get(alice), project = kit.create(input()); first.catalog = async () => models;
+  first.inferenceAdmission = async () => ({ status: 'healthy', canInfer: true });
   const job = await kit.submit(project.id, { requestKey: randomUUID(), prompt: 'Saved queue.' }); first.scheduler.stop();
   const second = new TenantRegistry(options); let executions = 0;
   second.executionProvider = async () => ({ mode: 'zkapi', models: async () => models, complete: async () => { executions++; return { answer: 'Restarted queue', verification: 'fixture' }; }, release() {} });
   await second.scheduler.tick(); await second.scheduler.drain(); assert.equal(executions, 1); assert.equal(second.get(alice).store.data.jobs[0].status, 'completed'); second.scheduler.stop();
   const k = second.get(alice); second.catalog = async () => models;
+  second.inferenceAdmission = async () => ({ status: 'healthy', canInfer: true });
   // Simulate a crash after the queue's durable dispatch but before model output.
   second.scheduler.stopped = false;
   const uncertain = await k.submit(project.id, { requestKey: randomUUID(), prompt: 'Interrupted dispatch.' }); second.scheduler.stop();

@@ -49,8 +49,10 @@ function validate(data, mode) {
     };
     let reservation = 0;
     for (const step of job.steps) {
-      if (!object(step) || !['queued', 'running', 'completed', 'uncertain'].includes(step.status)) invalid();
-      const day = step.day ?? job.day, held = step.simulatedCharge ?? heldFor(step.callAccounting);
+      if (!object(step) || !['queued', 'running', 'completed', 'uncertain', 'not-dispatched'].includes(step.status)) invalid();
+      const unattempted = step.status === 'not-dispatched';
+      if (unattempted && (mode !== 'zkapi' || ['callAccounting', 'additionalCalls', 'output', 'verification', 'simulatedCharge', 'toolActivity'].some(field => step[field] !== undefined))) invalid();
+      const day = step.day ?? job.day, held = unattempted ? 0 : step.simulatedCharge ?? heldFor(step.callAccounting);
       if (step.callAccounting && (mode !== 'zkapi' || step.status === 'queued')) invalid();
       if (!date(day) || !amount(held) || held > job.cap || (step.simulatedCharge !== undefined && (mode !== 'demo' || step.status !== 'completed'))) invalid();
       reservation += held; days.get(p.id).set(day, (days.get(p.id).get(day) || 0) + held);
