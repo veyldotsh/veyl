@@ -93,7 +93,7 @@ function statusData(raw, expectedAddress, expectedAmount) {
  */
 export class ZkApiFunding {
   #provider; #managementToken; #file; #now; #localMode; #allowApproval; #busy = false; #healthy = true; #state; #diskHash = null; #operations; #authorizeApproval;
-  constructor({ file, base = 'http://127.0.0.1:8787', key = '', managementToken = '', localMode = false, allowApproval = false, authorizeApproval = () => {}, fetcher = fetch, now = Date.now } = {}) {
+  constructor({ file, base = 'http://127.0.0.1:8787', key = '', managementToken = '', localMode = false, allowApproval = false, authorizeApproval = () => {}, chainClient = null, fetcher = fetch, now = Date.now } = {}) {
     if (typeof authorizeApproval !== 'function') throw new Problem('Invalid synchronous funding authorization callback.');
     this.#authorizeApproval = () => { if (authorizeApproval()?.then) throw new Problem('Funding authorization must be synchronous.', 409); };
     this.#provider = new ZkApiProvider({ base, key, fetcher });
@@ -142,6 +142,15 @@ export class ZkApiFunding {
     }
     this.#operations = new FundingOperations({ file: this.#file + '.operations', network: ZKAPI_MAINNET,
       request: (path, body) => this.#request(path, body), requireApproval: () => this.#require({ approval: true }),
+      observe: path => this.#request(path, undefined, true), otherUnresolved: () => this.#state.intents.some(item => !['active', 'abandoned'].includes(item.status)),
+      chainState: chainClient ? async address => {
+        try {
+          const chainId = await chainClient.getChainId();
+          if (chainId !== 1) throw new Error();
+          const [latestNonce, pendingNonce] = await Promise.all(['latest', 'pending'].map(blockTag => chainClient.getTransactionCount({ address, blockTag })));
+          return { chainId, address, latestNonce, pendingNonce };
+        } catch { throw new Problem('Cannot independently verify the funding nonce on Ethereum. Preserve the attempted approval.', 503); }
+      } : undefined,
       lock: fn => this.#locked(fn), now: this.#now, authorizeApproval: this.#authorizeApproval });
   }
   capabilities() {
@@ -159,6 +168,7 @@ export class ZkApiFunding {
   refreshOperation(id) { return this.#operations.refresh(id); }
   approveOperation(input) { return this.#operations.approve(input); }
   recoverOperation(id) { return this.#operations.recover(id); }
+  retireExpiredOperation(input) { return this.#operations.retireExpired(input); }
   resumeOperation(input) { return this.#operations.resume(input); }
   #public(intent) { return { ...copy(intent), quoteExpired: intent.quote ? intent.quote.expires_at <= this.#now() : false }; }
   #require({ approval = false } = {}) {
@@ -212,7 +222,7 @@ export class ZkApiFunding {
     }
   }
   #find(id) { const intent = this.#state.intents.find(item => item.id === id); if (!intent) throw new Problem('Funding intent not found.', 404); return intent; }
-  async #request(path, body) {
+  async #request(path, body, observation = false) {
     this.#require();
     const allowed = new Set(['/admin/funding/address', '/admin/funding/quote', '/admin/funding/approve', '/admin/funding/deposit',
       '/admin/withdrawal', '/admin/withdrawal/quote', '/admin/withdrawal/approve', '/admin/return', '/admin/return/quote', '/admin/return/approve']);
@@ -226,7 +236,11 @@ export class ZkApiFunding {
       if (!response.ok) { await response.body?.cancel(); throw new Problem(`zkAPI funding returned HTTP ${response.status}. Preserve the intent and inspect recovery; no automatic retry was sent.`, 502); }
       const reader = response.body.getReader(), chunks = []; let size = 0;
       while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > 131_072) { await reader.cancel(); fail(); } chunks.push(value); }
-      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (!observation) return data;
+      const date = response.headers.get('date'), servedAt = Date.parse(date || '');
+      if (body !== undefined || !Number.isSafeInteger(servedAt) || new Date(servedAt).toUTCString() !== date || Math.abs(this.#now() - servedAt) > 30_000 || response.headers.get('cache-control') !== 'no-store') throw new Problem('The authenticated daemon response lacks a fresh no-store clock witness.', 502);
+      return { data, servedAt };
     } catch (error) { throw error instanceof Problem ? error : new Problem('Cannot read zkAPI funding response. The result may be uncertain; no automatic retry was sent.', 502); }
   }
   async #inspect() {
@@ -352,7 +366,7 @@ export class ZkApiFunding {
   }
 }
 
-export function fundingFromEnv({ file, localMode = false, env = process.env, fetcher = fetch, now = Date.now, authorizeApproval } = {}) {
-  return new ZkApiFunding({ file, localMode, fetcher, now, authorizeApproval, base: env.ZKAPI_ORIGIN, key: env.ZKAPI_LOCAL_KEY,
+export function fundingFromEnv({ file, localMode = false, env = process.env, fetcher = fetch, now = Date.now, authorizeApproval, chainClient } = {}) {
+  return new ZkApiFunding({ file, localMode, fetcher, now, authorizeApproval, chainClient, base: env.ZKAPI_ORIGIN, key: env.ZKAPI_LOCAL_KEY,
     managementToken: env.ZKAPI_MANAGEMENT_TOKEN, allowApproval: env.VEYL_ENABLE_ZKAPI_APPROVAL === 'true' });
 }

@@ -76,7 +76,7 @@ export class TenantRegistry {
         if (!['no_note', 'ready', 'complete'].includes(withdrawal.phase)) return false;
         const returned = await runtime.rawFunding.inspectOperation('return');
         const journal = runtime.rawFunding.snapshot();
-        return !kit.operations.has(entry.projectId) && !kit.store.data.jobs.some(job => job.projectId === entry.projectId && job.status === 'running') && ['ready', 'quoted', 'complete'].includes(returned.phase) && journal.persistence === 'healthy' && journal.intents.every(i => ['quoted', 'active', 'abandoned'].includes(i.status)) && journal.operations.every(i => ['quoted', 'complete', 'reverted'].includes(i.status));
+        return !kit.operations.has(entry.projectId) && !kit.store.data.jobs.some(job => job.projectId === entry.projectId && job.status === 'running') && ['ready', 'quoted', 'complete'].includes(returned.phase) && journal.persistence === 'healthy' && journal.intents.every(i => ['quoted', 'active', 'abandoned'].includes(i.status)) && journal.operations.every(i => ['quoted', 'complete', 'reverted', 'expired_unsigned'].includes(i.status));
       } catch { return false; }
       } finally { lease.release(); }
     };
@@ -365,7 +365,7 @@ export class TenantRegistry {
     if (cached) return cached;
     const directory = resolve(this.directory, owner.toLowerCase(), projectId); mkdirSync(directory, { recursive: true, mode: 0o700 });
     const rawProvider = new ZkApiProvider({ base: entry.origin, key: entry.key });
-    const rawFunding = fundingFromEnv({ file: resolve(directory, 'funding-intents.json'), localMode: true,
+    const rawFunding = fundingFromEnv({ file: resolve(directory, 'funding-intents.json'), localMode: true, chainClient: this.mainnet.client,
       authorizeApproval: () => { if (this.financeContext.getStore()?.purpose === 'automatic-runway' && !this.runwayIdle(owner, projectId)) throw new Problem('Automatic funding was paused before daemon authorization.', 409); },
       env: { ZKAPI_ORIGIN: entry.origin, ZKAPI_LOCAL_KEY: entry.key, ZKAPI_MANAGEMENT_TOKEN: entry.managementToken, VEYL_ENABLE_ZKAPI_APPROVAL: this.approvalEnabled ? 'true' : 'false' } });
     const wrap = (target, pure = []) => new Proxy(target, { get: (object, property) => typeof object[property] !== 'function' ? object[property] : pure.includes(property) ? object[property].bind(object) : (...args) => this.provisioner.withRuntime(owner, projectId, () => object[property](...args)) });
@@ -652,6 +652,10 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
             }
             if (parts[4] === 'operation-refresh') return json(200, await runtime.funding.refreshOperation(body.intentId));
             if (parts[4] === 'operation-recover') return json(200, await runtime.funding.recoverOperation(body.intentId));
+            if (parts[4] === 'operation-retire-expired') {
+              if (url.search || Object.keys(body).sort().join() !== 'approvalDigest,intentId,quoteId' || Object.values(body).some(value => typeof value !== 'string')) throw new Problem('Provide only the saved recovery intent, quote ID and review digest.');
+              return json(200, await runtime.funding.retireExpiredOperation(body));
+            }
             if (['approve', 'resume', 'operation-approve', 'operation-resume'].includes(parts[4])) {
               if (!(transactionsEnabled && registry.approvalEnabled)) throw new Problem('zkAPI funding requires both mainnet transactions and daemon approval to be enabled by the worker.', 403);
               const method = { approve: 'approve', resume: 'resume', 'operation-approve': 'approveOperation', 'operation-resume': 'resumeOperation' }[parts[4]];

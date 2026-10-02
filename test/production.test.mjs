@@ -82,6 +82,22 @@ test('hosted API isolates project and artifact access across wallet sessions and
   assert.equal((await request(`/api/projects/${id}/notes`, sessions[0], { content: 'private memory' }, 'wrong')).status, 403);
   assert.equal((await request(`/api/projects/${id}/notes`, sessions[0], { content: 'private memory' })).status, 200);
   assert.equal((await request(`/api/projects/${id}/funding/approve`, sessions[0], {})).status, 403);
+  let retireCalls = 0;
+  const retireBody = { intentId: 'saved-recovery-intent', quoteId: 'saved-quote', approvalDigest: 'exact-reviewed-digest' };
+  registry.ready = async () => ({ funding: { retireExpiredOperation: async input => {
+    retireCalls++; assert.deepEqual(input, retireBody);
+    assert.equal(registry.get(first.address).operations.has(id), true);
+    return { status: 'expired_unsigned', approvalAttempted: true };
+  } } });
+  const retirePath = `/api/projects/${id}/funding/operation-retire-expired`;
+  assert.equal((await request(retirePath, undefined, retireBody)).status, 401);
+  assert.equal((await request(retirePath, sessions[1], retireBody)).status, 404);
+  assert.equal((await request(retirePath, sessions[0], retireBody, 'wrong')).status, 403);
+  assert.equal((await request(retirePath, sessions[0], { ...retireBody, rpc: 'https://untrusted.invalid' })).status, 400);
+  assert.equal((await request(retirePath + '?override=1', sessions[0], retireBody)).status, 400);
+  assert.equal(retireCalls, 0);
+  assert.equal((await request(retirePath, sessions[0], retireBody)).body.status, 'expired_unsigned');
+  assert.equal(retireCalls, 1); assert.equal(registry.get(first.address).operations.has(id), false);
   registry.get(first.address).project(id).artifacts.push({ id: 'artifact-private', title: 'Private', content: 'secret' }); registry.get(first.address).store.save();
   assert.equal((await request('/api/artifacts/artifact-private', sessions[1])).status, 404);
   assert.ok(!readFileSync(resolve(directory, first.address.toLowerCase(), 'kit.sealed.json'), 'utf8').includes('private memory'));

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {encodeFunctionData} from 'viem';
 import {TREASURY_RUNWAY_ABI} from '../src/runway.mjs';
-import {checkedRunway, checkedFunding, canRetireUnsigned, ethToWei, noteExpiryView, RunwayWalletClient, mountRunwayPanel} from '../public/runway-panel.js';
+import {checkedRunway, checkedFunding, canRetireUnsigned, canRetireExpiredOperation, ethToWei, noteExpiryView, RunwayWalletClient, mountRunwayPanel} from '../public/runway-panel.js';
 import {createApp} from '../src/server.mjs';
 const OWNER='0x0000000000000000000000000000000000000001',TREASURY='0x0000000000000000000000000000000000000002',DAEMON='0x0000000000000000000000000000000000000003',OTHER='0x0000000000000000000000000000000000000004',HASH='0x'+'a'.repeat(64),EXPENSE='0x'+'b'.repeat(64),NOW=1790860000000;
 const project={id:randomUUID(),mainnet:{treasury:TREASURY}};
@@ -78,4 +78,49 @@ test('only a failed unsigned preparation offers retirement and requires explicit
  assert.match(e.innerHTML,/Retire unsigned preparation/);e.fire('click',control('retire-refill',{refill:item.id}));await settled(p);
  e.fire('click',control('execute'));await settled(p);assert.equal(retired,0);
  e.fire('change',{checked:true,matches:s=>s==='[data-runway-review]'});e.fire('click',control('execute'));await settled(p);assert.equal(retired,1);assert.equal(f.sends(),0);assert.match(e.innerHTML,/history is preserved/);p.destroy();
+});
+
+function expiredOperation() {
+ const f=funding(),i=f.operations[0];Object.assign(i,{status:'recovery_required',approvalAttempted:true,observed:{phase:'quoted',address:DAEMON,destination:TREASURY}});Object.assign(i.quote,{expires_at:NOW-2000,nonce:3});return f;
+}
+function retiredOperation(i){return{...structuredClone(i),status:'expired_unsigned',unsignedEvidence:{quoteId:i.quote.id,quoteDigest:i.approvalDigest,address:DAEMON,chainId:1,latestNonce:3,pendingNonce:3,daemonAt:NOW,checkedAt:NOW}};}
+test('expired approval retirement needs exact review, sends only three fields and requires a separate fresh quote action',async()=>{
+ const e=new Element(),f=fixture(),fund=expiredOperation(),item=fund.operations[0],calls=[];let retired;
+ const w=new RunwayWalletClient({project,owner:OWNER,...f});w.operationAttempt(item.id);
+ const api=async(path,body)=>{
+  if(body)calls.push({path,body});
+  if(path.endsWith('/operation-retire-expired')){assert.deepEqual(body,{intentId:item.id,quoteId:item.quote.id,approvalDigest:item.approvalDigest});retired=retiredOperation(item);fund.operations=[retired];return retired;}
+  if(path.endsWith('/operation-quote')){assert.notEqual(body.idempotencyKey,item.request.idempotencyKey);assert.match(body.idempotencyKey,/^[a-f0-9-]{36}$/);assert.equal(body.noteId,item.request.noteId);assert.equal(body.destination,TREASURY);const next=funding().operations[0];fund.operations.push(next);return next;}
+  return path.endsWith('/runway')?f.s:fund;
+ };
+ const p=mountRunwayPanel(e,{project,owner:OWNER,hosted:true,client:f.client,capabilities:{transactionsEnabled:false},api,now:()=>NOW});await p.ready;
+ assert.match(e.innerHTML,/Review expired approval/);e.fire('click',control('retire-operation',{intent:item.id}));await settled(p);
+ assert.match(e.innerHTML,/No transaction is signed or sent/);e.fire('click',control('execute'));await settled(p);assert.equal(calls.length,0);
+ e.fire('change',{checked:true,matches:s=>s==='[data-runway-review]'});e.fire('click',control('execute'));await settled(p);
+ assert.equal(calls.length,1);assert.equal(w.uncertainOperations().length,0);assert.equal(f.sends(),0);assert.match(e.innerHTML,/Expired approval retired/);assert.doesNotMatch(e.innerHTML,/Approval outcome is unknown/);assert.match(e.innerHTML,/Prepare a fresh quote/);
+ e.fire('click',control('fresh-operation',{intent:item.id}));await settled(p);assert.equal(calls.length,2);assert.ok(calls[1].path.endsWith('/operation-quote'));assert.equal(calls.filter(c=>c.path.endsWith('/operation-approve')).length,0);
+ assert.match(e.innerHTML,/Review its new terms and approve separately/);assert.doesNotMatch(e.innerHTML,/data-runway="fresh-operation"/);p.destroy();
+});
+test('signed or unproven operations never expose expired approval retirement and retain known-hash recovery',async()=>{
+ for(const patch of [{transactionHash:HASH},{status:'pending',transactionHash:HASH},{observed:null},{observed:{phase:'quoted',address:DAEMON,destination:TREASURY,transactionHash:HASH}},{observed:{phase:'waiting_settlement',address:DAEMON,destination:TREASURY}},{approvalAttempted:false}]){
+  const e=new Element(),f=fixture(),fund=expiredOperation(),item=fund.operations[0];Object.assign(item,patch);assert.equal(canRetireExpiredOperation(item,fund,NOW),false);let writes=0;
+  const p=mountRunwayPanel(e,{project,owner:OWNER,hosted:true,client:f.client,capabilities:{transactionsEnabled:true},api:async(path,body)=>{if(body)writes++;return path.endsWith('/runway')?f.s:fund;},now:()=>NOW});await p.ready;
+  assert.doesNotMatch(e.innerHTML,/data-runway="retire-operation"/);if(item.status==='pending')assert.match(e.innerHTML,/Review same-transaction resume/);
+  e.fire('click',control('retire-operation',{intent:item.id}));await settled(p);assert.equal(writes,0);p.destroy();
+ }
+});
+test('lost or invalid retirement response preserves browser uncertainty and never prepares or approves a replacement',async()=>{
+ for(const invalid of [null,'wrong-id','missing-evidence']){
+  const e=new Element(),f=fixture(),fund=expiredOperation(),item=fund.operations[0],w=new RunwayWalletClient({project,owner:OWNER,...f});w.operationAttempt(item.id);const calls=[];
+  const api=async(path,body)=>{if(body){calls.push(path);if(!invalid)throw Error('Response lost');const r=retiredOperation(item);if(invalid==='wrong-id')r.id=randomUUID();else delete r.unsignedEvidence;return r;}return path.endsWith('/runway')?f.s:fund;};
+  const p=mountRunwayPanel(e,{project,owner:OWNER,hosted:true,client:f.client,capabilities:{transactionsEnabled:false},api,now:()=>NOW});await p.ready;e.fire('click',control('retire-operation',{intent:item.id}));await settled(p);e.fire('change',{checked:true,matches:s=>s==='[data-runway-review]'});e.fire('click',control('execute'));await settled(p);
+  assert.equal(calls.length,1);assert.ok(calls[0].endsWith('/operation-retire-expired'));assert.deepEqual(w.uncertainOperations(),[item.id]);assert.doesNotMatch(e.innerHTML,/data-runway="fresh-operation"/);assert.equal(f.sends(),0);p.destroy();
+ }
+});
+test('wallet changes and a replaced saved digest invalidate expired approval review',async()=>{
+ const e=new Element(),f=fixture(),fund=expiredOperation(),item=fund.operations[0];let changed,writes=0;
+ f.client.addEventListener=(name,fn)=>{if(name==='change')changed=fn;};f.client.removeEventListener=()=>{};
+ const p=mountRunwayPanel(e,{project,owner:OWNER,hosted:true,client:f.client,capabilities:{transactionsEnabled:false},api:async(path,body)=>{if(body)writes++;return path.endsWith('/runway')?f.s:fund;},now:()=>NOW});await p.ready;
+ e.fire('click',control('retire-operation',{intent:item.id}));await settled(p);e.fire('change',{checked:true,matches:s=>s==='[data-runway-review]'});changed();e.fire('click',control('execute'));await settled(p);assert.equal(writes,0);
+ e.fire('change',{checked:true,matches:s=>s==='[data-runway-review]'});item.approvalDigest='e'.repeat(64);e.fire('click',control('execute'));await settled(p);assert.equal(writes,0);assert.match(e.innerHTML,/expired approval changed/);p.destroy();
 });

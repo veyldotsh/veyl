@@ -5,7 +5,8 @@ import { PublicJournal } from './public-journal.mjs';
 
 const KINDS = new Set(['withdrawal', 'return']);
 const PHASES = new Set(['ready', 'no_note', 'waiting_settlement', 'waiting_funds', 'quoted', 'withdrawal_pending', 'return_pending', 'confirming', 'complete', 'reverted', 'recovery_required']);
-const STATES = new Set(['quoting', 'quote_unknown', 'quoted', 'approving', 'approval_unknown', 'pending', 'resuming', 'resume_unknown', 'complete', 'reverted', 'recovery_required']);
+const STATES = new Set(['quoting', 'quote_unknown', 'quoted', 'approving', 'approval_unknown', 'pending', 'resuming', 'resume_unknown', 'complete', 'reverted', 'recovery_required', 'expired_unsigned']);
+const TERMINAL = new Set(['complete', 'reverted', 'expired_unsigned']);
 const FEES = ['principal_wei', 'balance_wei', 'expected_fee_wei', 'required_fee_wei', 'fee_reserve_wei', 'fee_buffer_wei', 'required_total_wei', 'recommended_total_wei', 'shortfall_wei', 'recommended_top_up_wei', 'max_fee_per_gas', 'max_priority_fee_per_gas'];
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const copy = value => structuredClone(value);
@@ -54,8 +55,8 @@ function statusData(raw, kind, network) {
   }
   if (raw.destination) status.destination = addr(raw.destination);
   if (raw.amount_wei) status.amountWei = wei(raw.amount_wei);
-  if (raw.transaction_hash) status.transactionHash = tx(raw.transaction_hash);
-  if (raw.actual_fee_wei) status.actualFeeWei = wei(raw.actual_fee_wei);
+  if (raw.transaction_hash !== undefined && raw.transaction_hash !== '') status.transactionHash = tx(raw.transaction_hash);
+  if (raw.actual_fee_wei !== undefined && raw.actual_fee_wei !== '') status.actualFeeWei = wei(raw.actual_fee_wei);
   return status;
 }
 
@@ -63,21 +64,28 @@ function statusData(raw, kind, network) {
  * The daemon owns proofs and private wallet state. This class persists exact
  * public authorizations and never invents a receipt from model JSON. */
 export class FundingOperations {
-  #journal; #network; #request; #requireApproval; #lock; #now; #authorizeApproval;
-  constructor({ file, network, request, requireApproval, lock, now, authorizeApproval = () => {} }) {
+  #journal; #network; #request; #requireApproval; #lock; #now; #authorizeApproval; #observe; #chainState; #otherUnresolved;
+  constructor({ file, network, request, requireApproval, lock, now, authorizeApproval = () => {}, observe, chainState, otherUnresolved = () => false }) {
+    this.#observe = observe; this.#chainState = chainState; this.#otherUnresolved = otherUnresolved;
     this.#authorizeApproval = authorizeApproval;
     this.#network = network; this.#request = request; this.#requireApproval = requireApproval; this.#lock = lock; this.#now = now;
     this.#journal = new PublicJournal(file, { version: 1, deploymentId: network.deploymentId, intents: [] }, saved => {
       if (!saved || Object.keys(saved).sort().join() !== 'deploymentId,intents,version' || saved.version !== 1 || saved.deploymentId !== network.deploymentId || !Array.isArray(saved.intents) || saved.intents.length > 1000) throw new Error();
       const ids = new Set(), keys = new Set();
       for (const item of saved.intents) {
-        if (Object.keys(item).some(k => !['id', 'request', 'createdAt', 'status', 'approvalAttempted', 'address', 'quote', 'approvalDigest', 'transactionHash', 'observed'].includes(k)) || !/^[0-9a-f-]{36}$/.test(item.id) || ids.has(item.id) || !STATES.has(item.status) || typeof item.approvalAttempted !== 'boolean') throw new Error();
+        if (Object.keys(item).some(k => !['id', 'request', 'createdAt', 'status', 'approvalAttempted', 'address', 'quote', 'approvalDigest', 'transactionHash', 'observed', 'unsignedEvidence'].includes(k)) || !/^[0-9a-f-]{36}$/.test(item.id) || ids.has(item.id) || !STATES.has(item.status) || typeof item.approvalAttempted !== 'boolean') throw new Error();
         uint(item.createdAt); const checked = requestData(item.request); if (JSON.stringify(checked) !== JSON.stringify(item.request) || keys.has(checked.idempotencyKey)) throw new Error();
         if (item.address) addr(item.address);
         if (item.quote && (JSON.stringify(quoteData(item.quote, item, network)) !== JSON.stringify(item.quote) || digest(item.quote) !== item.approvalDigest)) throw new Error();
         if (item.approvalAttempted && !item.quote) throw new Error();
         if (item.transactionHash) tx(item.transactionHash);
         if (['pending', 'complete', 'reverted', 'resuming', 'resume_unknown'].includes(item.status) && (!item.approvalAttempted || !item.transactionHash)) throw new Error();
+        if (item.status === 'expired_unsigned') {
+          const e = item.unsignedEvidence;
+          if (!item.approvalAttempted || item.transactionHash || item.observed?.transactionHash || item.request.retryTransactionHash || !e || Object.keys(e).sort().join() !== 'address,chainId,checkedAt,daemonAt,latestNonce,pendingNonce,quoteDigest,quoteId' ||
+              e.chainId !== 1 || e.address !== item.address || e.quoteId !== item.quote.id || e.quoteDigest !== item.approvalDigest || uint(e.latestNonce) !== item.quote.nonce || uint(e.pendingNonce) !== item.quote.nonce ||
+              uint(e.daemonAt) < item.quote.expires_at + 1000 || uint(e.checkedAt) < item.quote.expires_at || item.observed?.phase !== 'quoted') throw new Error();
+        } else if (item.unsignedEvidence !== undefined) throw new Error();
         if (item.observed) {
           if (Object.keys(item.observed).some(k => !['kind', 'address', 'chainId', 'phase', 'balanceWei', 'noteId', 'privateBalanceGwei', 'amountGwei', 'destination', 'amountWei', 'transactionHash', 'actualFeeWei'].includes(k)) || item.observed.kind !== checked.kind || item.observed.chainId !== 1 || !PHASES.has(item.observed.phase) || addr(item.observed.address) !== item.address) throw new Error();
           wei(item.observed.balanceWei); if (item.observed.transactionHash) tx(item.observed.transactionHash);
@@ -93,7 +101,7 @@ export class FundingOperations {
   }
   #public(item) { return { ...copy(item), quoteExpired: item.quote ? item.quote.expires_at <= this.#now() : false }; }
   snapshot() { return { persistence: this.#journal.healthy ? 'healthy' : 'blocked', operations: this.#journal.state.intents.map(item => this.#public(item)) }; }
-  unresolved() { return this.#journal.state.intents.some(item => !['complete', 'reverted'].includes(item.status)); }
+  unresolved() { return this.#journal.state.intents.some(item => !TERMINAL.has(item.status)); }
   #exclusive(fn) { return this.#lock(() => this.#journal.exclusive(fn)); }
   #find(id) { const item = this.#journal.state.intents.find(i => i.id === id); if (!item) throw new Problem('Recovery operation not found.', 404); return item; }
   async #inspect(kind) { if (!KINDS.has(kind)) throw new Problem('Unsupported recovery operation.'); return statusData(await this.#request('/admin/' + kind), kind, this.#network); }
@@ -145,6 +153,7 @@ export class FundingOperations {
       const status = await this.#inspect(item.request.kind); this.#match(item, status);
       const oldRevertedTransaction = item.request.retryTransactionHash && status.transactionHash === item.request.retryTransactionHash;
       if ((status.transactionHash && !oldRevertedTransaction) || !['quoted', 'waiting_funds'].includes(status.phase) || BigInt(status.balanceWei) < BigInt(q.required_total_wei)) throw new Problem('Recovery operation is not ready or lacks its network fee.', 409);
+      if (q.expires_at <= this.#now()) throw new Problem('Recovery quote expired while checking readiness; refresh and review it.', 409);
       this.#authorizeApproval();
       item.status = 'approving'; item.approvalAttempted = true; this.#journal.save();
       try { this.#accept(item, statusData(await this.#request('/admin/' + item.request.kind + '/approve', { quote_id: quoteId }), item.request.kind, this.#network)); this.#journal.save(); return this.#public(item); }
@@ -153,13 +162,51 @@ export class FundingOperations {
   }
   recover(id) {
     return this.#exclusive(async () => {
-      const item = this.#find(id), status = await this.#inspect(item.request.kind);
+      const item = this.#find(id);
+      if (item.status === 'expired_unsigned') return this.#public(item);
+      const status = await this.#inspect(item.request.kind);
       if (item.address && status.address !== item.address) bad();
       if (!item.approvalAttempted) {
         const raw = await this.#request('/admin/' + item.request.kind + '/quote');
         if (raw) { item.address = status.address; item.quote = quoteData(raw, item, this.#network); item.approvalDigest = digest(item.quote); item.status = 'quoted'; }
       } else if (item.transactionHash && status.transactionHash === item.transactionHash) this.#accept(item, status);
       else { if (item.transactionHash && status.transactionHash) bad(); item.status = 'recovery_required'; item.observed = status; }
+      this.#journal.save(); return this.#public(item);
+    });
+  }
+  /** Retire one proven expired authorization, never reset or replay it. The
+   * pinned daemon clears Quote and durably saves Pending before broadcasting.
+   * Its mutex-protected saved-quote + public-address getters therefore prove
+   * this exact expired quote has no signed transaction. HTTP Date uses that
+   * daemon's clock; the independent server RPC must confirm its nonce is unused.
+   */
+  retireExpired({ intentId, quoteId, approvalDigest } = {}) {
+    return this.#exclusive(async () => {
+      const item = this.#find(intentId);
+      if (!item.quote || item.quote.id !== quoteId || item.approvalDigest !== approvalDigest) throw new Problem('Retirement differs from the exact recovery quote.', 409);
+      if (item.status === 'expired_unsigned') return this.#public(item);
+      if (!item.approvalAttempted || !['approval_unknown', 'recovery_required'].includes(item.status) || item.transactionHash || item.observed?.transactionHash || item.request.retryTransactionHash || item.quote.expires_at >= this.#now() ||
+          this.#otherUnresolved() || this.#journal.state.intents.some(i => i.id !== item.id && !TERMINAL.has(i.status))) throw new Problem('This attempted approval cannot be proven expired and unsigned. Preserve it for recovery.', 409);
+      if (typeof this.#observe !== 'function' || typeof this.#chainState !== 'function') throw new Problem('Independent unsigned recovery verification is unavailable.', 503);
+      const savedQuote = async () => {
+        const observed = await this.#observe('/admin/' + item.request.kind + '/quote');
+        const q = quoteData(observed.data, item, this.#network);
+        if (digest(q) !== approvalDigest || uint(observed.servedAt) < q.expires_at + 1000) throw new Problem('The daemon has not proven the exact reviewed quote expired and unsigned.', 409);
+        return observed.servedAt;
+      };
+      await savedQuote();
+      const status = await this.#inspect(item.request.kind); this.#match(item, status);
+      if (status.phase !== 'quoted' || status.transactionHash || status.actualFeeWei) throw new Problem('The daemon operation is not unsigned and quoted.', 409);
+      const funding = await this.#request('/admin/funding/address');
+      if (!funding || funding.chain_id !== 1 || funding.deployment_id !== this.#network.deploymentId || funding.billing_asset !== 'native_eth' || funding.billing_unit !== 'gwei' || funding.native_asset_wei_per_unit !== this.#network.weiPerUnit ||
+          funding.token_address !== '' || funding.token_decimals !== 9 || addr(funding.address) !== item.address || funding.phase !== (item.request.kind === 'withdrawal' ? 'withdrawal_pending' : 'ready') ||
+          (funding.transaction_hash !== undefined && funding.transaction_hash !== '') || (funding.actual_fee_wei !== undefined && funding.actual_fee_wei !== '') || wei(funding.eth_balance) !== status.balanceWei) throw new Problem('The funding address has not proven absence of a pending transaction.', 409);
+      const chain = await this.#chainState(item.address);
+      if (!chain || chain.chainId !== 1 || addr(chain.address) !== item.address || uint(chain.latestNonce) !== item.quote.nonce || uint(chain.pendingNonce) !== item.quote.nonce) throw new Problem('The reviewed funding nonce is no longer provably unused.', 409);
+      const daemonAt = await savedQuote();
+      // Nothing above signs, requotes or mutates daemon recovery state.
+      item.observed = status; item.status = 'expired_unsigned';
+      item.unsignedEvidence = { quoteId, quoteDigest: approvalDigest, address: item.address, chainId: 1, latestNonce: chain.latestNonce, pendingNonce: chain.pendingNonce, daemonAt, checkedAt: this.#now() };
       this.#journal.save(); return this.#public(item);
     });
   }
