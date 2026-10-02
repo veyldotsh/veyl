@@ -1,4 +1,4 @@
-import { WalletSession } from './wallet.js';
+import { WalletSession, isLocalWalletPreflightError } from './wallet.js';
 
 /** Connects the compact market UI to the authenticated unsigned-intent API.
  * A wallet confirmation is required for every transaction, including approval.
@@ -41,13 +41,14 @@ export class VeylChainClient extends EventTarget {
     try {
       const pending = { projectId, intentId: intent.id, status: 'sending', account: intent.account, submittedAt: Date.now() };
       // Save the ambiguous state before entering the wallet. A lost response may
-      // still have submitted a transaction, so only explicit rejection can clear it.
+      // still have submitted a transaction. Only explicit wallet rejection or a
+      // locally branded failure before submission can clear this pending row.
       if (!this.transactionsEnabled) throw new Error('Mainnet transactions are disabled.');
       await this.wallet.ensure(intent.account);
       this.savePending([...this.pending(), pending]);
       let transactionHash;
       try { transactionHash = await this.wallet.send(intent, { enabled: this.transactionsEnabled }); }
-      catch (error) { if (error?.code === 4001) this.savePending(this.pending().filter(r => r.intentId !== intent.id)); throw error; }
+      catch (error) { if (error?.code === 4001 || isLocalWalletPreflightError(error)) this.savePending(this.pending().filter(r => r.intentId !== intent.id)); throw error; }
       if (!/^0x[\da-f]{64}$/i.test(transactionHash || '')) throw new Error('Wallet did not return a valid transaction hash. Inspect it and recover the exact receipt before another send.');
       pending.transactionHash = transactionHash; pending.status = 'submitted';
       try { this.savePending(this.pending().map(r => r.intentId === intent.id ? pending : r)); }

@@ -50,14 +50,27 @@ test('actual unsigned protected launch encodes the published salt and token pred
   }
 });
 
-test('canonical main launch rejects a different creator or treasury owner; ordinary agents keep their own salt', () => {
+test('canonical main launch rejects a different creator or treasury owner; legacy agents keep their own salt', () => {
   const service = new MainnetMarkets({ config, client: {} }), project = { id: 'main', name: 'Veyl', symbol: 'VEYL' };
   assert.throws(() => service.launchConfig(project, { ...terms, account: other }, 1n), /configured main-token deployer/);
   assert.throws(() => service.launchConfig(project, { ...terms, treasuryOwner: other }, 1n), /configured main-token deployer/);
   const agent = { id: 'ordinary-project', name: 'Research', symbol: 'RES' };
-  const result = service.launchConfig(agent, { ...terms, account: other, treasuryOwner: other, liquidityQuote: '10', liquidityTokens: '100000000', tokensPerQuote: '1000000', tickLower: -887200, tickUpper: 887200 }, 1n);
+  const legacyConfig = structuredClone(config); Object.assign(legacyConfig.agentMarkets, { standardLaunch: false, standardFactory: null, tickSpacing: 200 });
+  const legacy = new MainnetMarkets({ config: legacyConfig, client: {} });
+  const result = legacy.launchConfig(agent, { ...terms, account: other, treasuryOwner: other, liquidityQuote: '10', liquidityTokens: '100000000', tokensPerQuote: '1000000', tickLower: -887200, tickUpper: 887200 }, 1n);
   assert.equal(result.config.salt, keccak256(stringToHex('veyl:ethereum:ordinary-project'))); assert.notEqual(result.config.salt, VEYL_MAIN_TOKEN_SALT);
-  assert.equal(result.config.tickSpacing, 200); assert.equal(service.capabilities(agent).liquidityCustody, 'permanently-locked');
+  assert.equal(result.config.tickSpacing, 200); assert.equal(legacy.capabilities(agent).liquidityCustody, 'permanently-locked');
+});
+
+test('activated public agent config advertises the standard one-sided policy independently of the main token', () => {
+  assert.equal(config.agentMarkets.standardLaunch, true); assert.equal(config.agentMarkets.sharedInfrastructure, true);
+  assert.notEqual(config.agentMarkets.standardFactory.toLowerCase(), config.agentMarkets.marketFactory.toLowerCase());
+  const service = new MainnetMarkets({ config, client: {} });
+  const policy = service.capabilities({ id: 'standard-project', name: 'Research', symbol: 'RES' });
+  assert.equal(policy.standardLaunch.enabled, true); assert.equal(policy.tickSpacing, 1);
+  assert.equal(policy.standardLaunch.allocationBps, 10000); assert.equal(policy.standardLaunch.creatorAllocation, '0');
+  assert.equal(policy.standardLaunch.targetFdvEth, '2'); assert.equal(policy.standardLaunch.quoteSeed, '0');
+  assert.equal(service.capabilities({ id: 'main', name: 'Veyl', symbol: 'VEYL' }).standardLaunch.enabled, false);
 });
 
 test('main NFT terms are fixed while treasury amounts remain explicit', () => {

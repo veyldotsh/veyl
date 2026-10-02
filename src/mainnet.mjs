@@ -18,6 +18,7 @@ const LAUNCH_LIMIT = parseEther('20000000');
 const MAIN_INITIAL_PRICE = 1771577727172025373304338615273325n;
 const STANDARD_FACTORY = 'VeylAgentLaunchFactory', STANDARD_VERSION = 'standard-agent-v1';
 const STANDARD_DUST = 1000000n, STANDARD_FDV = parseEther('2');
+const SIGNING_MARGIN_MS = 45000;
 const INFRA_STAGES = [
   { kind: 'quoter', field: 'quoter', artifact: 'VeylQuoter' },
   { kind: 'project-builder', field: 'projectBuilder', artifact: 'VeylProjectBuilder' },
@@ -286,6 +287,12 @@ export class MainnetMarkets {
     intent.digest = keccak256(stringToHex(JSON.stringify(intent.transaction)));
     project.mainnetIntents ||= []; project.mainnetIntents.push(intent); checkpoint();
     return intent;
+  }
+  executionTiming(expiresAt, blockTimestamp) {
+    const deadline = BigInt(Math.floor(expiresAt / 1000));
+    const signingExpiresAt = Number(deadline) * 1000 - SIGNING_MARGIN_MS;
+    if (signingExpiresAt <= this.now() || deadline <= blockTimestamp + BigInt(SIGNING_MARGIN_MS / 1000)) throw new Problem('Too little time remains to sign and mine this transaction. Request a fresh quote.', 409);
+    return { deadline, metadata: { executionDeadline: deadline.toString(), expiresAt: signingExpiresAt } };
   }
   async prepareFactory(project, input, checkpoint) {
     const policy = this.capabilities(project);
@@ -655,7 +662,11 @@ export class MainnetMarkets {
     const quote = project.mainnetQuotes?.find(q => q.id === input.quoteId);
     if (!quote || !equal(quote.account, account) || !equal(quote.poolId, market.poolId)) throw new Problem('Quote does not belong to this wallet and pool.', 409);
     if (market.quoteAsset && !equal(quote.quoteAsset, market.quoteAsset)) throw new Problem('Quote does not match this market payment asset.', 409);
-    if (quote.intentId) return project.mainnetIntents.find(i => i.id === quote.intentId);
+    if (quote.intentId) {
+      const existing = project.mainnetIntents.find(i => i.id === quote.intentId);
+      if (existing?.status === 'prepared' && existing.expiresAt <= this.now()) throw new Problem('Transaction signing window expired. Request a fresh quote.', 409);
+      return existing;
+    }
     if (quote.expiresAt <= this.now()) throw new Problem('Quote expired. Request a fresh quote.', 409);
     await this.checkLaunchTrade(market, account, quote.side, BigInt(quote.amountIn), BigInt(quote.amountOut || 0));
     if (quote.side === 'sell' || !nativeQuote(market)) {
@@ -663,12 +674,11 @@ export class MainnetMarkets {
       const approval = await this.prepareAllowance(project, account, asset, market.swapRouter, BigInt(quote.amountIn), { allowanceFor: quote.id, quoteId: quote.id, approvalAssetSymbol: quote.side === 'sell' ? project.symbol : market.quoteSymbol, expiresAt: quote.expiresAt }, checkpoint);
       if (approval) return approval;
     }
-    const block = await this.client.getBlock(), seconds = Math.floor((quote.expiresAt - this.now()) / 1000);
-    if (seconds < 1) throw new Problem('Quote expired during preparation.', 409);
-    const args = [BigInt(quote.minOut), BigInt(quote.priceLimit), block.timestamp + BigInt(seconds)];
+    const block = await this.client.getBlock(), timing = this.executionTiming(quote.expiresAt, block.timestamp);
+    const args = [BigInt(quote.minOut), BigInt(quote.priceLimit), timing.deadline];
     args.unshift(BigInt(quote.amountIn));
-    const intent = await this.makeIntent(project, quote.side, account, { to: market.swapRouter, data: encodeFunctionData({ abi: this.artifact('VeylSwapRouter').abi, functionName: quote.side, args }), value: quote.side === 'buy' && nativeQuote(market) ? BigInt(quote.amountIn) : 0n }, { quoteId: quote.id, expiresAt: quote.expiresAt, minimumOutput: quote.minimumOutput, expectedOutput: quote.expectedOutput, quoteSymbol: market.quoteSymbol, feeQuote: quote.feeQuote, ...(nativeQuote(market) ? { feeEth: quote.feeEth } : {}) }, checkpoint);
-    if (quote.expiresAt <= this.now()) { intent.status = 'expired'; checkpoint(); throw new Problem('Quote expired during simulation. Request a fresh quote.', 409); }
+    const intent = await this.makeIntent(project, quote.side, account, { to: market.swapRouter, data: encodeFunctionData({ abi: this.artifact('VeylSwapRouter').abi, functionName: quote.side, args }), value: quote.side === 'buy' && nativeQuote(market) ? BigInt(quote.amountIn) : 0n }, { quoteId: quote.id, ...timing.metadata, minimumOutput: quote.minimumOutput, expectedOutput: quote.expectedOutput, quoteSymbol: market.quoteSymbol, feeQuote: quote.feeQuote, ...(nativeQuote(market) ? { feeEth: quote.feeEth } : {}) }, checkpoint);
+    if (intent.expiresAt <= this.now()) { intent.status = 'expired'; checkpoint(); throw new Problem('Transaction signing window expired during simulation. Request a fresh quote.', 409); }
     quote.intentId = intent.id; checkpoint(); return intent;
   }
   async prepareMaintenance(project, input, checkpoint) {
@@ -706,8 +716,9 @@ export class MainnetMarkets {
       const floor = (amount * BigInt(current.policy.minEthPerVeylX18) + 10n ** 18n - 1n) / 10n ** 18n;
       const quotedMin = result.amountOut * BigInt(10000 - slippage) / 10000n, minOut = quotedMin > floor ? quotedMin : floor;
       if (!minOut || result.amountOut < minOut) throw new Problem('Current VEYL/ETH price is below the owner floor.', 409);
-      request = { to: market.revenueRouter, data: encodeFunctionData({ abi: this.artifact('QuoteRevenueRouter').abi, functionName: 'convertFees', args: [amount, minOut, LIMIT.sell, block.timestamp + 120n] }) };
-      meta = { amountQuote: formatEther(amount), quoteSymbol: 'VEYL', expectedOutput: formatEther(result.amountOut), minimumOutput: formatEther(minOut), minimumOutputWei: minOut.toString(), amountInWei: amount.toString(), destination: market.revenueRouter, expiresAt: this.now() + 110000 };
+      const timing = this.executionTiming(this.now() + 120000, block.timestamp);
+      request = { to: market.revenueRouter, data: encodeFunctionData({ abi: this.artifact('QuoteRevenueRouter').abi, functionName: 'convertFees', args: [amount, minOut, LIMIT.sell, timing.deadline] }) };
+      meta = { amountQuote: formatEther(amount), quoteSymbol: 'VEYL', expectedOutput: formatEther(result.amountOut), minimumOutput: formatEther(minOut), minimumOutputWei: minOut.toString(), amountInWei: amount.toString(), destination: market.revenueRouter, ...timing.metadata };
     } else if (input.action === 'fund') {
       const amount = decimal(input.amount, 'treasury deposit'); request = { to: market.treasury, value: amount }; meta.amountEth = formatEther(amount);
     } else if (input.action === 'recipient' || input.action === 'daily-limit' || input.action === 'operator') {
@@ -718,7 +729,9 @@ export class MainnetMarkets {
       if (input.action === 'operator') { fn = 'setOperator'; args = [nonzero(input.operator, 'operator')]; meta.operator = args[0]; }
       request = { to: market.treasury, data: encodeFunctionData({ abi: this.artifact('AgentTreasury').abi, functionName: fn, args }) };
     } else throw new Problem('Unsupported maintenance action.');
-    return this.makeIntent(project, input.action, account, request, meta, checkpoint);
+    const intent = await this.makeIntent(project, input.action, account, request, meta, checkpoint);
+    if (meta.executionDeadline && intent.expiresAt <= this.now()) { intent.status = 'expired'; checkpoint(); throw new Problem('Transaction signing window expired during simulation. Prepare a fresh conversion.', 409); }
+    return intent;
   }
   async verify(project, input, checkpoint) {
     await this.checkChain();

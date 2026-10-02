@@ -41,6 +41,18 @@ test('public config rejects key material and unsupported fields without reflecti
   assert.ok(validateConfig(wrongChain).invalid.includes('chainId'));
 });
 
+test('public deployment hashes accept only the bounded canonical address-to-runtime-hash map', () => {
+  const address = '0x1111111111111111111111111111111111111111', hash = keccak256(bytecode), value = config();
+  value.deployments = { codeHashes: { [address]: hash } };
+  assert.doesNotThrow(() => validateConfig(value));
+  for (const invalid of [null, [], { privateKey: 'must-not-appear' }, { [address]: { secret: 'must-not-appear' } }, { [address]: '0x1234' }, { ['0x' + '0'.repeat(40)]: hash }, { ['0x' + 'A'.repeat(40)]: hash }, Object.fromEntries(Array.from({ length: 65 }, (_, i) => ['0x' + (i + 1).toString(16).padStart(40, '0'), hash]))]) {
+    const changed = structuredClone(value); changed.deployments.codeHashes = invalid;
+    assert.throws(() => validateConfig(changed), error => /deployment code hash map/.test(error.message) && !error.message.includes('must-not-appear'));
+  }
+  value.deployments.privateKey = 'must-not-appear';
+  assert.throws(() => validateConfig(value), error => /Unrecognized/.test(error.message) && !error.message.includes('must-not-appear'));
+});
+
 test('approved main NFT plan preserves canonical address inputs and rejects mismatched economics', () => {
   const result = validateConfig(approved);
   assert.deepEqual(result.invalid, ['confirmations.freshSignerConfirmed']);
@@ -82,6 +94,7 @@ test('shared infrastructure mode is explicit and must be a boolean', () => {
 test('fixed agent launch mode requires a distinct nonzero shared factory without changing main-token terms', () => {
   const value = structuredClone(approved);
   value.agentMarkets.standardLaunch = true;
+  delete value.agentMarkets.standardFactory;
   assert.ok(validateConfig(value).missing.includes('agentMarkets.standardFactory'));
   value.agentMarkets.standardFactory = value.agentMarkets.marketFactory;
   assert.ok(validateConfig(value).invalid.includes('agentMarkets.standardFactory'));

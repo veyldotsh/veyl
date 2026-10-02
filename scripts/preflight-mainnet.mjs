@@ -6,6 +6,7 @@ import { isAddress, keccak256, parseEther, stringToHex, zeroAddress } from 'viem
 import { verifyMainnet } from './check-mainnet.mjs';
 
 const ROOT = new URL('../', import.meta.url);
+const CODE_HASH_MAP = Symbol('public deployment runtime hashes');
 const SCHEMA = {
   chainId: null,
   project: { name: null, symbol: null, launchSalt: null, launchSaltLabel: null },
@@ -16,9 +17,10 @@ const SCHEMA = {
   mainTokenLaunch: { positionManager: null, recipient: null, startingFdvEth: null, actualStartingFdvEth: null, sqrtPriceX96: null, liquidityEth: null, targetLiquidityTokens: null, maximumCreatorTokens: null, tickLower: null, tickUpper: null, roundingPolicy: null, maximumRoundingDustWei: null },
   zkapi: { daemonHostPlan: null, maxPrepaidEth: null, reconciliationPolicy: null },
   confirmations: { freshSignerConfirmed: null },
+  deployments: { codeHashes: CODE_HASH_MAP },
 };
 
-const OPTIONAL = new Set(['project.launchSalt', 'project.launchSaltLabel', 'agentMarkets.tickSpacing', 'agentMarkets.sharedInfrastructure', 'agentMarkets.standardLaunch', 'agentMarkets.standardFactory', 'trading.liquidityCustody', 'mainTokenLaunch']);
+const OPTIONAL = new Set(['project.launchSalt', 'project.launchSaltLabel', 'agentMarkets.tickSpacing', 'agentMarkets.sharedInfrastructure', 'agentMarkets.standardLaunch', 'agentMarkets.standardFactory', 'trading.liquidityCustody', 'mainTokenLaunch', 'deployments']);
 const MAIN_SALT_LABEL = 'veyl:ethereum:main-token:v1', MAIN_SALT = keccak256(stringToHex(MAIN_SALT_LABEL));
 function publicSchema(value, schema, parent = '') {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected a public configuration object.');
@@ -27,7 +29,11 @@ function publicSchema(value, schema, parent = '') {
     const path = parent ? `${parent}.${key}` : key;
     if (!Object.hasOwn(value, key) && OPTIONAL.has(path)) continue;
     if (!Object.hasOwn(value, key)) throw new Error('Configuration is missing required schema fields.');
-    if (shape) publicSchema(value[key], shape, path);
+    if (shape === CODE_HASH_MAP) {
+      const hashes = value[key];
+      if (!hashes || typeof hashes !== 'object' || Array.isArray(hashes) || Object.keys(hashes).length > 64 || Object.entries(hashes).some(([address, hash]) => !/^0x[0-9a-f]{40}$/.test(address) || address === zeroAddress || typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash))) throw new Error('Invalid public deployment code hash map. Use canonical nonzero addresses and 32-byte runtime hashes only.');
+    }
+    else if (shape) publicSchema(value[key], shape, path);
     else if (value[key] !== null && !['string', 'number', 'boolean'].includes(typeof value[key])) throw new Error('Invalid public configuration field type.');
     else if (typeof value[key] === 'string' && /(?:0x)?[0-9a-fA-F]{64}/.test(value[key]) && !(path === 'project.launchSalt' && value[key] === MAIN_SALT)) throw new Error('Configuration must not contain key-sized hexadecimal material.');
   }

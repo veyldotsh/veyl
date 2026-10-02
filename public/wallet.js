@@ -1,4 +1,8 @@
 // EIP-1193 wallet connection. Private keys never enter Veyl's page or server.
+const localPreflightErrors = new WeakSet();
+const preflightError = message => { const error = new Error(message); localPreflightErrors.add(error); return error; };
+export const isLocalWalletPreflightError = error => localPreflightErrors.has(error);
+
 export class WalletSession extends EventTarget {
   constructor({ provider = globalThis.ethereum, storage = globalThis.sessionStorage } = {}) {
     super(); this.provider = provider; this.storage = storage; this.account = null; this.chainId = null;
@@ -44,7 +48,7 @@ export class WalletSession extends EventTarget {
   }
   async send(intent, { enabled = false } = {}) {
     if (!enabled) throw new Error('Ethereum transactions are disabled until deployment is explicitly enabled.');
-    if (!intent || intent.chainId !== 1 || intent.status !== 'prepared' || !intent.transaction || intent.expiresAt <= Date.now()) throw new Error('This transaction is unavailable or expired. Prepare a fresh intent.');
+    if (!intent || intent.chainId !== 1 || intent.status !== 'prepared' || !intent.transaction || intent.expiresAt <= Date.now()) throw preflightError('This transaction is unavailable or expired. Prepare a fresh intent.');
     const tx = intent.transaction;
     if (tx.chainId !== '0x1' || tx.from?.toLowerCase() !== intent.account?.toLowerCase() || !/^0x[\da-f]*$/i.test(tx.data || '') || !/^0x[\da-f]+$/i.test(tx.value || '') || (tx.to && !this.validAccount(tx.to))) throw new Error('The transaction does not match a valid Ethereum intent.');
     if (!tx.to && !['quoter', 'project-builder', 'market-builder', 'liquidity-builder', 'factory'].includes(intent.kind)) throw new Error('Only the explicit quoter, builder or factory deployment can create a contract.');
@@ -53,6 +57,7 @@ export class WalletSession extends EventTarget {
     // authorization lists, nonce overrides or a signer/account override.
     const transaction = { from: tx.from, ...(tx.to ? { to: tx.to } : {}), data: tx.data, value: tx.value, chainId: '0x1' };
     if (tx.gas && /^0x[\da-f]+$/i.test(tx.gas)) transaction.gas = tx.gas;
+    if (intent.expiresAt <= Date.now()) throw preflightError('The signing window expired while checking your wallet. Prepare a fresh intent.');
     const hash = await this.provider.request({ method: 'eth_sendTransaction', params: [transaction] });
     if (!/^0x[\da-f]{64}$/i.test(hash || '')) throw new Error('Wallet submission outcome is unknown. Check your wallet before trying again.');
     return hash;

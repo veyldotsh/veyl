@@ -100,7 +100,7 @@ test('factory preparation requires a confirmed chain-bound quoter before buildin
   await assert.rejects(service.prepareFactory(project, { account }, () => {}), /another PoolManager/);
 });
 
-function swapFixture({ allowance = 0n, quoteAccount = account, expiry = 105000, clock = 100000, simulationExpires = false } = {}) {
+function swapFixture({ allowance = 0n, quoteAccount = account, expiry = 220000, clock = 100000, simulationExpires = false } = {}) {
   const calls = [], q = { id: 'quote-1', side: 'sell', account: quoteAccount, poolId: hash(5), amountIn: '1000', minOut: '900', priceLimit: '4295128740', expiresAt: expiry, expectedOutput: '0.000000000000001', minimumOutput: '0.0000000000000009' };
   let time = clock, saves = 0;
   const service = new MainnetMarkets({ config, now: () => time, client: {
@@ -123,12 +123,33 @@ test('mainnet sell prepares only an exact token approval then requires a fresh w
 });
 
 test('mainnet quote account, expiry, and estimation expiry prevent swap preparation', async () => {
-  for (const settings of [{ quoteAccount: other }, { clock: 105001 }, { allowance: 1000n, simulationExpires: true }]) {
+  for (const settings of [{ quoteAccount: other }, { clock: 220001 }, { allowance: 1000n, simulationExpires: true }]) {
     const f = swapFixture(settings);
     await assert.rejects(f.service.prepareSwap(f.project, { account, quoteId: 'quote-1' }, f.checkpoint), e => e.status === 409);
     assert.equal(f.q.intentId, undefined);
     assert.ok(!f.project.mainnetIntents || f.project.mainnetIntents.every(i => i.status === 'expired'));
   }
+});
+
+test('swap calldata uses absolute quote expiry despite stale block age and closes signing45seconds earlier', async () => {
+  const f = swapFixture({ allowance: 1000n });
+  f.service.client.getBlock = async () => ({ timestamp: 70n });
+  const intent = await f.service.prepareSwap(f.project, { account, quoteId: f.q.id }, f.checkpoint);
+  const decoded = decodeFunctionData({ abi: f.service.artifact('VeylSwapRouter').abi, data: intent.transaction.data });
+  assert.equal(decoded.args[3], 220n); assert.equal(intent.executionDeadline, '220'); assert.equal(intent.expiresAt, 175000);
+  assert.equal(intent.expiresAt + 45000, Number(decoded.args[3]) * 1000);
+  f.service.now = () => 175000;
+  await assert.rejects(f.service.prepareSwap(f.project, { account, quoteId: f.q.id }, f.checkpoint), /signing window expired/);
+  const late = swapFixture({ allowance: 1000n, clock: 176000 });
+  await assert.rejects(late.service.prepareSwap(late.project, { account, quoteId: late.q.id }, late.checkpoint), /Too little time/);
+  assert.equal(late.project.mainnetIntents, undefined);
+});
+
+test('simulation consuming the mining margin expires the unsigned swap before it is returned', async () => {
+  const f = swapFixture({ allowance: 1000n });
+  f.service.client.estimateGas = async () => { f.service.now = () => 175000; return 90000n; };
+  await assert.rejects(f.service.prepareSwap(f.project, { account, quoteId: f.q.id }, f.checkpoint), /during simulation/);
+  assert.equal(f.project.mainnetIntents[0].status, 'expired'); assert.equal(f.q.intentId, undefined);
 });
 
 function verifyFixture({ mutation = {}, receiptMutation = {}, head = 11n, canonical = hash(8) } = {}) {
@@ -179,6 +200,44 @@ function walletFixture({ chain = '0x1', walletAccount = account } = {}) {
     transaction: { from: account, to: router, data: '0xabcd', value: '0x1', chainId: '0x1', nonce: '0x12', method: 'arbitrary' } };
   return { wallet, calls, intent };
 }
+
+test('wallet refuses an intent that expires while chain and account are checked', async () => {
+  const f = walletFixture();
+  f.wallet.ensure = async () => { f.intent.expiresAt = Date.now() - 1; };
+  await assert.rejects(f.wallet.send(f.intent, { enabled: true }), /signing window expired/);
+  assert.equal(f.calls.some(c => c.method === 'eth_sendTransaction'), false);
+});
+
+test('proven local expiry clears only its own pending row and permits a fresh reviewed intent', async () => {
+  for (const expireDuringCheck of [false, true]) {
+    const f = walletFixture(), data = new Map(), storage = { getItem: k => data.get(k) || null, setItem: (k, v) => data.set(k, v) };
+    const originalEnsure = f.wallet.ensure.bind(f.wallet); let ensures = 0;
+    if (expireDuringCheck) f.wallet.ensure = async address => { await originalEnsure(address); if (++ensures === 2) f.intent.expiresAt = Date.now() - 1; };
+    else f.intent.expiresAt = Date.now() - 1;
+    const client = new VeylChainClient({ wallet: f.wallet, storage, transactionsEnabled: true, api: async (_path, input) => ({ id: input.intentId, transactionHash: input.transactionHash, status: 'confirmed' }) });
+    const otherPending = { projectId: 'other', intentId: 'other-intent', account: other, status: 'submitted', transactionHash: hash(9) };
+    client.savePending([otherPending]);
+    await assert.rejects(client.execute('project-a', f.intent), /expired/);
+    assert.deepEqual(client.pending(), [otherPending]); assert.equal(f.calls.some(c => c.method === 'eth_sendTransaction'), false);
+    f.wallet.ensure = originalEnsure;
+    const fresh = { ...f.intent, id: 'fresh', expiresAt: Date.now() + 60000 };
+    assert.equal((await client.execute('project-a', fresh)).status, 'confirmed');
+    assert.deepEqual(client.pending(), [otherPending]);
+    assert.equal(f.calls.filter(c => c.method === 'eth_sendTransaction').length, 1);
+  }
+});
+
+test('provider-supplied expiry flags cannot impersonate a trusted local pre-submission failure', async () => {
+  const f = walletFixture(), data = new Map(), storage = { getItem: k => data.get(k) || null, setItem: (k, v) => data.set(k, v) }, original = f.wallet.provider.request;
+  f.wallet.provider.request = async request => {
+    if (request.method === 'eth_sendTransaction') throw Object.assign(new Error('The signing window expired while checking your wallet. Prepare a fresh intent.'), { code: 'VEYL_NOT_SUBMITTED', notSubmitted: true, localPreflight: true });
+    return original(request);
+  };
+  const client = new VeylChainClient({ wallet: f.wallet, storage, transactionsEnabled: true, api: async () => {} });
+  await assert.rejects(client.execute('project-a', f.intent), /expired/);
+  assert.equal(client.pending().length, 1); assert.equal(client.pending()[0].status, 'sending');
+  await assert.rejects(client.execute('project-a', { ...f.intent, id: 'fresh' }), /unknown/);
+});
 
 test('wallet writes remain disabled by default and chain/account changes cannot redirect a prepared action', async () => {
   const disabled = walletFixture(); await assert.rejects(disabled.wallet.send(disabled.intent), /disabled/); assert.equal(disabled.calls.length, 0);
@@ -277,20 +336,23 @@ test('VEYL buys approve the pinned quote token and send zero ETH with four exact
   f.service.artifact = () => ({ abi: parseAbi(['function buy(uint256 quoteAmountIn,uint256 minTokensOut,uint160 sqrtPriceLimitX96,uint256 deadline) payable returns(uint256)']) });
   const buy = await f.service.prepareSwap(f.project, { account, quoteId: f.q.id }, f.checkpoint);
   const decoded = decodeFunctionData({ abi: f.service.artifact().abi, data: buy.transaction.data });
-  assert.deepEqual(decoded.args, [1000n, 900n, 4295128740n, 105n]); assert.equal(buy.transaction.value, '0x0');
+  assert.deepEqual(decoded.args, [1000n, 900n, 4295128740n, 220n]); assert.equal(buy.transaction.value, '0x0');
+  assert.equal(buy.executionDeadline, '220'); assert.equal(buy.expiresAt, 175000);
 });
 
 test('conversion intents enforce enabled policy, owner caps, exact fill and floor before preparing a wallet request', async () => {
   const market = { quoteKind: 'veyl', quoteAsset: token, revenueRouter: router, treasury: other, quoter: address(5), conversionHook: address(6) };
   const current = { policy: { executor: account, enabled: true, maxQuotePerConversion: '10000000000000000000', maxQuotePerDay: '20000000000000000000', minEthPerVeylX18: '1000000000000000' }, pendingQuote: '10000000000000000000', spentToday: '0' };
   let output = parseEther('0.02'), fill = parseEther('10'), prepared = 0;
-  const service = new MainnetMarkets({ config, client: { getBlock: async () => ({ timestamp: 1000n }), simulateContract: async () => ({ result: { amountIn: fill, amountOut: output } }) } });
+  const service = new MainnetMarkets({ config, now: () => 1000000, client: { getBlock: async () => ({ timestamp: 985n }), simulateContract: async () => ({ result: { amountIn: fill, amountOut: output } }) } });
   service.validateMarket = async () => market; service.conversionStatus = async () => current; service.read = async () => other;
   service.artifact = () => ({ abi: parseAbi(['function convertFees(uint256 amountIn,uint256 minEthOut,uint160 limit,uint256 deadline) returns(uint256)']) });
   service.makeIntent = async (_p, kind, _a, tx, meta) => { prepared++; return { kind, tx, ...meta }; };
   const input = { account, action: 'convert-fees', amount: '10', slippageBps: 50 };
   const result = await service.prepareMaintenance({}, input, () => {});
   assert.equal(result.kind, 'convert-fees'); assert.equal(result.destination, router);
+  assert.equal(decodeFunctionData({ abi: service.artifact().abi, data: result.tx.data }).args[3], 1120n);
+  assert.equal(result.executionDeadline, '1120'); assert.equal(result.expiresAt, 1075000);
   assert.equal(result.minimumOutputWei, parseEther('0.0199').toString()); assert.equal(prepared, 1);
   for (const mutate of [() => current.policy.enabled = false, () => current.policy.maxQuotePerConversion = '1', () => current.spentToday = parseEther('11').toString()]) {
     const saved = structuredClone(current); mutate(); await assert.rejects(service.prepareMaintenance({}, input, () => {}), /disabled or exceeds/); Object.assign(current, saved);
