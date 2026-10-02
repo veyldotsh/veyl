@@ -17,9 +17,10 @@ The public draft `config/mainnet.json` uses 180 basis points on buys and sells, 
 Run from `zk-agent-prototype`:
 
 ```powershell
-& C:\Users\operator\.foundry\bin\forge.exe test --root contracts
-& C:\Users\operator\.foundry\bin\forge.exe build --root contracts --sizes
-& C:\Users\operator\.foundry\bin\forge.exe fmt --root contracts --check
+$forgePath = Join-Path $HOME '.foundry\bin\forge.exe'
+& $forgePath test --root contracts
+& $forgePath build --root contracts --sizes
+& $forgePath fmt --root contracts --check
 node --test contracts/preflight-mainnet.test.mjs
 node contracts/export-abi.mjs
 node scripts/preflight-mainnet.mjs --offline
@@ -30,7 +31,8 @@ The mainnet-fork acceptance is explicitly skipped in the ordinary suite. To opt 
 
 ```powershell
 $env:VEYL_MAINNET_FORK='true'
-& C:\Users\operator\.foundry\bin\forge.exe test --root contracts --match-contract 'Veyl.*MainnetForkTest' -vv
+$forgePath = Join-Path $HOME '.foundry\bin\forge.exe'
+& $forgePath test --root contracts --match-contract 'Veyl.*MainnetForkTest' -vv
 Remove-Item Env:\VEYL_MAINNET_FORK
 ```
 

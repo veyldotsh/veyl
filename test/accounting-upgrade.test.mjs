@@ -16,13 +16,14 @@ function fixture(fault = '') {
   const root = mkdtempSync(join(tmpdir(), 'veyl-upgrade-')), base = unix(join(root, 'veyl')), mocks = unix(join(root, 'mocks')), etc = unix(join(root, 'etc'));
   const release = base + '/releases/new', old = base + '/releases/old', candidate = base + '/native-releases/reviewed';
   mkdirSync(join(root, 'mocks'));
-  const env = { ...process.env, MSYS: 'winsymlinks', VEYL_TEST_MOCKS: mocks, VEYL_TEST_BASE: base, VEYL_TEST_ETC: etc, VEYL_TEST_FAULT: fault };
+  const env = { ...process.env, MSYS: 'winsymlinks', VEYL_HOME: base, VEYL_SERVICE_USER: 'veyl', VEYL_TEST_MOCKS: mocks, VEYL_TEST_BASE: base, VEYL_TEST_ETC: etc, VEYL_TEST_FAULT: fault };
   function run(command, args = []) { return spawnSync(bash, ['--noprofile', '--norc', '-c', 'export PATH="$VEYL_TEST_MOCKS:/usr/bin:/bin"; ' + command, 'fixture', ...args], { env, encoding: 'utf8', timeout: 20000 }); }
   let prepared = run('mkdir -p "$1"/{bin,worker-data,vendor/runtime/bin,vendor/runtime/lib/original,native-releases/reviewed,releases/new/deployment,releases/old} "$2/system"; printf "#!old-client" >"$1/bin/zkapi-clientd-control"; printf old-manifest >"$1/bin/runtime-manifest.json"; printf "#!old-wallet" >"$1/vendor/runtime/lib/original/zkapi-walletd"; printf private-unchanged >"$1/runtime.env"; printf data >"$1/worker-data/state"; printf image >"$1/worker-data.ext4"; printf new-client >"$1/native-releases/reviewed/zkapi-clientd-control"; printf new-wallet >"$1/native-releases/reviewed/zkapi-walletd"; for name in runtime-manifest.json source-lock.json build-report.json go-build-report.json; do printf new-manifest >"$1/native-releases/reviewed/$name"; done; chmod 755 "$1/bin/zkapi-clientd-control" "$1/vendor/runtime/lib/original/zkapi-walletd"; ln -s "$1/vendor/runtime/lib/original/zkapi-walletd" "$1/vendor/runtime/bin/zkapi-walletd"; ln -s "$1/releases/old" "$1/current"; printf active >"$1/service-state"', [base, etc]);
   assert.equal(prepared.status, 0, prepared.stderr);
   for (const [name, destination] of [['veyl.service', 'system/veyl.service'], ['veyl-data.mount', 'system/veyl-data.mount'], ['journald@veyl.conf', 'journald@veyl.conf']]) {
-    const content = readFileSync(new URL('../deployment/' + name, import.meta.url));
-    writeFileSync(join(root, 'veyl/releases/new/deployment', name), content); writeFileSync(join(root, 'etc', destination), content);
+    const content = readFileSync(new URL('../deployment/' + name, import.meta.url), 'utf8');
+    writeFileSync(join(root, 'veyl/releases/new/deployment', name), content);
+    writeFileSync(join(root, 'etc', destination), content.replaceAll('/home/veyl/veyl', base));
   }
   const mock = (name, source) => writeFileSync(join(root, 'mocks', name), '#!/usr/bin/env bash\nset -eu\n' + source + '\n', { mode: 0o755 });
   mock('id', 'printf "0\\n"');
@@ -35,7 +36,7 @@ function fixture(fault = '') {
   mock('ss', 'exit 0');
   mock('sync', 'exit 0');
   mock('sleep', 'exit 0');
-  mock('stat', 'case "$2" in "%U") printf "veyl\\n";; "%U %a") printf "root 700\\n";; "%U %a %s") printf "root 600 2147483648\\n";; *) exec /usr/bin/stat "$@";; esac');
+  mock('stat', 'case "$2" in "%U") printf "%s\\n" "$VEYL_SERVICE_USER";; "%U %a") printf "root 700\\n";; "%U %a %s") printf "root 600 2147483648\\n";; *) exec /usr/bin/stat "$@";; esac');
   mock('readlink', 'if [[ "$*" == "-f /proc/123/cwd" ]]; then exec /usr/bin/realpath "$VEYL_TEST_BASE/current"; else exec /usr/bin/readlink "$@"; fi');
   mock('install', 'while [[ "$1" == -* ]]; do if [[ "$1" == -- ]]; then shift; break; fi; shift 2; done; /usr/bin/cp "$1" "$2"; /usr/bin/chmod 755 "$2"');
   mock('mv', 'if [[ "$VEYL_TEST_FAULT" == manifest-write && "${@: -1}" == "$VEYL_TEST_BASE/bin/runtime-manifest.json" && ! -f "$VEYL_TEST_BASE/fault-fired" ]]; then touch "$VEYL_TEST_BASE/fault-fired"; exit 1; fi; exec /usr/bin/mv "$@"');
@@ -65,8 +66,9 @@ if [[ "$*" == *check-vps-runtime.mjs* ]]; then
   [[ "$*" == *"/usr/bin/env NODE_OPTIONS="* && "$*" == *"VEYL_ZKAPI_CLIENTD=$VEYL_TEST_BASE/native-releases/reviewed/zkapi-clientd-control"* && "$*" == *"VEYL_ZKAPI_WALLETD=$VEYL_TEST_BASE/native-releases/reviewed/zkapi-walletd"* && "$*" == *"VEYL_ZKAPI_MANIFEST=$VEYL_TEST_BASE/native-releases/reviewed/runtime-manifest.json"* ]] || exit 2
   [[ "$VEYL_TEST_FAULT" != smoke ]] || exit 1
 fi`);
-  const source = script.replaceAll('/home/veyl/veyl', base).replaceAll('/etc/systemd', etc);
+  const source = script.replaceAll('/etc/systemd', etc);
   writeFileSync(join(root, 'upgrade.sh'), source);
+  writeFileSync(join(root, 'paths.sh'), readFileSync(new URL('../deployment/paths.sh', import.meta.url)));
   // Git Bash honors its own symlink representation without Windows symlink privileges.
   prepared = run('chmod 755 "$1"/*', [mocks]); assert.equal(prepared.status, 0, prepared.stderr);
   const result = run('bash "$1" "$2" "$3" "$4"', [unix(join(root, 'upgrade.sh')), release, old, candidate]);

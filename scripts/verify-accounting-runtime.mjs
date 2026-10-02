@@ -1,3 +1,4 @@
+import { installationPaths, namedInstallationPath } from './installation-paths.mjs';
 import { createHash } from 'node:crypto';
 import { createReadStream, readFileSync, realpathSync, lstatSync, accessSync, constants, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -7,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 export async function verifyAccountingRuntime(directory) {
   if (process.platform !== 'linux' || process.arch !== 'arm64') throw Error('Accounting runtime requires Linux ARM64.');
   directory = resolve(directory);
-  if (!/^\/home\/veyl\/veyl\/native-releases\/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(directory) || realpathSync(directory) !== directory) throw Error('Unexpected native candidate directory.');
+  if (!namedInstallationPath(directory, 'native-releases') || realpathSync(directory) !== directory) throw Error('Unexpected native candidate directory.');
   const read = name => {
     const path = resolve(directory, name), stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 100_000) throw Error('Invalid native build metadata.');
@@ -40,7 +41,7 @@ export async function verifyAccountingRuntime(directory) {
   for (const value of ['GOOS=linux', 'GOARCH=arm64', 'CGO_ENABLED=0', `vcs.revision=${lock.daemonRevision}`, 'vcs.modified=true']) if (!metadata.includes(value)) throw Error('Candidate Go build metadata differs.');
   const expected = { version: 2, sourceRevision: lock.daemonRevision, companionRevision: lock.companionRevision, protocolRevision: lock.protocolRevision,
     patch: 'VEYL_CALL_ACCOUNTING_V1', sourceLockSha256, clientSha256: client.clientSha256, walletSha256: wallet.walletSha256,
-    proofManifestSha256: await hash('/home/veyl/veyl/vendor/runtime/lib/zkapi-clientd/current/share/zkapi-clientd/proof-setup/manifest.json') };
+    proofManifestSha256: await hash(installationPaths().base + '/vendor/runtime/lib/zkapi-clientd/current/share/zkapi-clientd/proof-setup/manifest.json') };
   for (const [name, value] of Object.entries(expected)) if (manifest[name] !== value) throw Error('Candidate runtime manifest differs from reviewed inputs.');
   return { manifest: expected, sourceCommit: wallet.sourceCommit, runId: wallet.runId };
 }

@@ -1,3 +1,4 @@
+import { installationPaths } from './installation-paths.mjs';
 // Read-only network checks of a fresh, unfunded zkAPI profile. Run on Linux
 // inside a separately bounded transient systemd service; never production state.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -5,7 +6,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
-const base = '/home/veyl/veyl';
+const { base } = installationPaths();
 if (process.platform !== 'linux') throw new Error('This measurement needs Linux /proc and a bounded service.');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const free = port => new Promise(resolve => {

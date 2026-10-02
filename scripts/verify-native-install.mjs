@@ -1,3 +1,4 @@
+import { installationPaths } from './installation-paths.mjs';
 import { createHash } from 'node:crypto';
 import { createReadStream, readFileSync, writeFileSync, realpathSync, existsSync } from 'node:fs';
 import { spawn, execFileSync } from 'node:child_process';
@@ -8,7 +9,8 @@ import { dirname } from 'node:path';
 
 // This verifies the already-reviewed build's current provenance and records its
 // hashes; it does not retroactively attest every original compiler input.
-const base = '/home/veyl/veyl', revision = 'b826c169b4831665822529f535f824265f50630b';
+const { base } = installationPaths();
+const revision = 'b826c169b4831665822529f535f824265f50630b';
 if (process.platform !== 'linux' || process.arch !== 'arm64') throw new Error('The native installation lock requires Linux ARM64.');
 const source = `${base}/build/zkapi-${revision}`, client = `${base}/bin/zkapi-clientd-control`, wallet = `${base}/vendor/runtime/bin/zkapi-walletd`, proofs = `${base}/vendor/runtime/lib/zkapi-clientd/current/share/zkapi-clientd/proof-setup`;
 const savedManifest = `${base}/bin/runtime-manifest.json`;

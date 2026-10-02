@@ -3,9 +3,10 @@
 # starts a daemon, creates a wallet, signs, or funds a transaction.
 set -euo pipefail
 umask 077
-base=${1:?Usage: install-zkapi.sh /home/veyl/veyl /path/to/veyl/checkout}
+source "$(dirname -- "${BASH_SOURCE[0]}")/paths.sh"
+requested_base=${1:?Pass the explicit installation directory}
 checkout=${2:?Veyl source checkout is required}
-[[ "$base" == /home/veyl/veyl ]] || { printf 'Unexpected installation directory\n' >&2; exit 1; }
+[[ "$requested_base" == "$base" ]] || { printf 'Unexpected installation directory\n' >&2; exit 1; }
 [[ "$(uname -s)" == Linux && "$(uname -m)" == aarch64 ]] || { printf 'This lock is for Linux ARM64\n' >&2; exit 1; }
 mkdir -p "$base/vendor" "$base/bin" "$base/build"
 revision=b826c169b4831665822529f535f824265f50630b

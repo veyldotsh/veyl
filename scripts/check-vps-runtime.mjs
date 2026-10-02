@@ -1,3 +1,4 @@
+import { installationPaths } from './installation-paths.mjs';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -8,7 +9,8 @@ import { MainnetMarkets } from '../src/mainnet.mjs';
 import { WalletAuth } from '../src/auth.mjs';
 import { GatewayVerifier } from '../src/gateway-auth.mjs';
 
-const base = '/home/veyl/veyl', smokeRoot = process.env.VEYL_SMOKE_ROOT || base + '/data';
+const { base } = installationPaths();
+const smokeRoot = process.env.VEYL_SMOKE_ROOT || base + '/data';
 if (![base + '/data', base + '/worker-data/acceptance'].includes(smokeRoot)) throw new Error('Smoke data must remain in the dedicated Veyl acceptance directory.');
 const directory = resolve(smokeRoot, 'smoke-' + randomUUID());
 mkdirSync(directory, { recursive: true, mode: 0o700 });

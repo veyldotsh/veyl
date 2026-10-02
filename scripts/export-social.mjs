@@ -1,8 +1,9 @@
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { statSync } from 'node:fs';
+import { homedir } from 'node:os';
 const require = createRequire(import.meta.url);
-const sharp = require(process.env.VEYL_SHARP_PATH || 'C:/Users/operator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/sharp');
+const sharp = require(process.env.VEYL_SHARP_PATH || resolve(homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/sharp'));
 const root = resolve(import.meta.dirname, '..');
 // Format export of the selected, image-tool-edited 3:1 artwork.
 // All creative changes to the banner are made with the image tool first.

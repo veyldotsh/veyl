@@ -1,6 +1,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
 
 // Original vector geometry. Two offset folds make a V without closing the seam.
 export const fold = '<path d="M9 15H28C33 15 37 18 39 23L60 74L47 93L16 33Z"/><path d="M52 48L66 15H92L71 66C67 77 62 84 56 89C62 76 61 68 57 58Z"/>';
@@ -22,7 +23,7 @@ for (const [file, symbol, word] of [['veyl-lockup.svg','#c9e596','#182a21'],['ve
 writeFileSync(resolve(publicDir, 'veyl-avatar.svg'), avatar);
 // Raster exports of the native vectors, not edits of generated artwork.
 const require = createRequire(import.meta.url);
-const sharp = require(process.env.VEYL_SHARP_PATH || 'C:/Users/operator/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/sharp');
+const sharp = require(process.env.VEYL_SHARP_PATH || resolve(homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/sharp'));
 await sharp(Buffer.from(avatar)).resize(400,400).png().toFile(resolve(publicDir,'veyl-avatar.png'));
 for (const [file,color] of [['veyl-logo.png','#c9e596'],['veyl-logo-light.png','#c9e596']]) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1080" viewBox="0 0 100 108" fill="${color}">${fold}</svg>`;

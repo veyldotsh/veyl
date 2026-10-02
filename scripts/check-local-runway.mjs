@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPublicClient, createWalletClient, encodeAbiParameters, getCreate2Address, http, keccak256, parseEther, stringToHex, toHex, zeroAddress } from 'viem';
@@ -13,7 +13,7 @@ import { TreasuryRunway } from '../src/runway.mjs';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const port = Number(process.env.VEYL_RUNWAY_TEST_PORT || 18547);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid disposable test port.');
-const anvil = process.env.ANVIL_BINARY || (process.platform === 'win32' ? 'C:/Users/operator/.foundry/bin/anvil.exe' : 'anvil');
+const anvil = process.env.ANVIL_BINARY || (process.platform === 'win32' ? join(homedir(), '.foundry', 'bin', 'anvil.exe') : 'anvil');
 const child = spawn(anvil, ['--host', '127.0.0.1', '--port', String(port), '--chain-id', '1', '--silent'], { windowsHide: true, stdio: 'ignore' });
 let spawnError; child.on('error', error => { spawnError = error; });
 const transport = http(`http://127.0.0.1:${port}`, { retryCount: 0, fetchOptions: { redirect: 'error' } });

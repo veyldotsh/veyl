@@ -17,8 +17,11 @@ that exact authenticated GitHub run, compare their hashes, and preserve the
 reports together with the binaries. Give the service user read and execute
 permission on the staged binaries before verification.
 
-Stage one candidate under `/home/veyl/veyl/native-releases/<name>` and a separate
-worker release under `/home/veyl/veyl/releases/<name>`. The combined upgrade
+Use `VEYL_SERVICE_USER=veyl` and `VEYL_HOME=/home/veyl/veyl` as portable defaults.
+Existing hosts must explicitly preserve their reviewed account and path through
+these two variables when installing or upgrading. Stage one candidate under
+`$VEYL_HOME/native-releases/<name>` and a separate worker release under
+`$VEYL_HOME/releases/<name>`. The combined upgrade
 script verifies the candidate, runs a resource-bounded unfunded smoke, preserves
 the original native files, then switches the Veyl worker and native components
 together. It retains the existing environment and wallet-profile paths and

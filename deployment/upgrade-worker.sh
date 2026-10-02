@@ -2,29 +2,29 @@
 # Upgrade one explicitly identified Veyl release. Preserve all financial state.
 set -euo pipefail
 umask 077
-base=/home/veyl/veyl
+source "$(dirname -- "${BASH_SOURCE[0]}")/paths.sh"
 release=${1:?Pass the new named Veyl release directory}
 expected_old=${2:?Pass the exact current Veyl release directory}
 fail() { printf 'Veyl upgrade: %s\n' "$*" >&2; exit 1; }
 [[ $(id -u) == 0 ]] || fail 'Run with sudo.'
-[[ "$release" =~ ^/home/veyl/veyl/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || fail 'Invalid release path.'
+[[ "$release" =~ ^"$base"/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]] || fail 'Invalid release path.'
 [[ -d "$release" && "$(realpath "$release")" == "$release" && "$(realpath "$base")" == "$base" ]] || fail 'Unexpected path or symlink.'
-[[ "$(stat -c %U "$release")" == veyl && -L "$base/current" ]] || fail 'Unexpected owner or current pointer.'
+[[ "$(stat -c %U "$release")" == "$service_user" && -L "$base/current" ]] || fail 'Unexpected owner or current pointer.'
 old=$(realpath "$base/current")
-[[ "$expected_old" =~ ^/home/veyl/veyl/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ && "$old" == "$expected_old" && "$old" != "$release" ]] || fail 'Current release differs from the explicitly expected release.'
+[[ "$expected_old" =~ ^"$base"/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ && "$old" == "$expected_old" && "$old" != "$release" ]] || fail 'Current release differs from the explicitly expected release.'
 [[ ! -L "$base/install.lock" && ( ! -e "$base/install.lock" || -f "$base/install.lock" ) ]] || fail 'Invalid installation lock.'
 exec 9>>"$base/install.lock"
 flock -n 9 || fail 'Another installation is running.'
 mount_unit=$(systemd-escape --path --suffix=mount "$base/worker-data")
 for pair in "deployment/veyl.service|/etc/systemd/system/veyl.service" "deployment/veyl-data.mount|/etc/systemd/system/$mount_unit" "deployment/journald@veyl.conf|/etc/systemd/journald@veyl.conf"; do
   source=${pair%%|*}; target=${pair#*|}
-  [[ -f "$target" && ! -L "$target" ]] && cmp -s "$release/$source" "$target" || fail 'Existing service settings differ; preserve and review them.'
+  [[ -f "$target" && ! -L "$target" ]] && cmp -s <(veyl_render "$release/$source") "$target" || fail 'Existing service settings differ; preserve and review them.'
 done
 for unit in veyl.service "$mount_unit"; do
   [[ "$(systemctl show "$unit" -p FragmentPath --value)" == "/etc/systemd/system/$unit" && -z "$(systemctl show "$unit" -p DropInPaths --value)" && "$(systemctl show "$unit" -p NeedDaemonReload --value)" == no ]] || fail 'Existing unit configuration differs.'
 done
 [[ -f "$base/runtime.env" && ! -L "$base/runtime.env" && -f "$base/bin/runtime-manifest.json" && ! -L "$base/bin/runtime-manifest.json" ]] || fail 'Existing private configuration required.'
-runuser -u veyl -- /usr/bin/node "$release/scripts/prepare-worker-env.mjs" "$release"
+runuser -u "$service_user" -- /usr/bin/env VEYL_HOME="$base" VEYL_SERVICE_USER="$service_user" /usr/bin/node "$release/scripts/prepare-worker-env.mjs" "$release"
 env_digest=$(sha256sum "$base/runtime.env")
 mountpoint -q "$base/worker-data" || fail 'Bounded data volume is not mounted.'
 device=$(findmnt -n -o SOURCE --mountpoint "$base/worker-data")
@@ -34,11 +34,11 @@ for option in nodev nosuid noexec; do [[ "$options" == *",$option,"* ]] || fail 
 [[ "$(stat -c '%U %a %s' "$base/worker-data.ext4")" == 'root 600 2147483648' ]] || fail 'Unexpected data image.'
 [[ $(df -B1 --output=avail "$base/worker-data" | tail -n 1) -ge 536870912 ]] || fail 'Insufficient storage headroom.'
 systemctl is-active --quiet veyl.service || fail 'Existing Veyl worker must be active.'
-runuser -u veyl -- /usr/bin/node "$old/scripts/check-worker.mjs"
+runuser -u "$service_user" -- /usr/bin/env VEYL_HOME="$base" VEYL_SERVICE_USER="$service_user" /usr/bin/node "$old/scripts/check-worker.mjs"
 prepare_seq=0
 prep() {
   prepare_seq=$((prepare_seq + 1))
-  systemd-run --quiet --wait --pipe --collect --unit="veyl-upgrade-prepare-$$-$prepare_seq" --uid=veyl --gid=veyl \
+  systemd-run --quiet --wait --pipe --collect --unit="veyl-upgrade-prepare-$$-$prepare_seq" --uid="$service_user" --gid="$service_user" --setenv=VEYL_HOME="$base" --setenv=VEYL_SERVICE_USER="$service_user" \
     --property=WorkingDirectory="$release" --property=CPUQuota=50% --property=MemoryMax=768M --property=MemorySwapMax=0 \
     --property=TasksMax=64 --property=RuntimeMaxSec=600 --property=UMask=0077 --property=NoNewPrivileges=yes --property=PrivateTmp=yes \
     --property=Nice=19 --property=IOWeight=10 --setenv=PATH=/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin "$@"
@@ -61,7 +61,7 @@ for (const name of ['VeylMainLiquidityBuilder','VeylMainLiquidityDeployer','Veyl
 console.log('Compiled artifacts, ABI exports and deployment sizes passed.');
 NODE
 for port in 19800 19801; do [[ -z "$(ss -H -ltn "sport = :$port")" ]] || fail 'Smoke port occupied; existing owner preserved.'; done
-systemd-run --quiet --wait --pipe --collect --unit="veyl-upgrade-smoke-$$" --uid=veyl --gid=veyl \
+systemd-run --quiet --wait --pipe --collect --unit="veyl-upgrade-smoke-$$" --uid="$service_user" --gid="$service_user" --setenv=VEYL_HOME="$base" --setenv=VEYL_SERVICE_USER="$service_user" \
   --property=WorkingDirectory="$release" --property=EnvironmentFile="$base/runtime.env" \
   --property=CPUQuota=50% --property=MemoryHigh=512M --property=MemoryMax=768M --property=MemorySwapMax=0 \
   --property=TasksMax=64 --property=RuntimeMaxSec=120 --property=TimeoutStopSec=10 --property=KillMode=control-group \
@@ -80,7 +80,7 @@ healthy() {
   local expected=$1 pid
   for attempt in $(seq 1 20); do
     pid=$(systemctl show veyl.service -p MainPID --value)
-    if systemctl is-active --quiet veyl.service && [[ "$pid" =~ ^[1-9][0-9]*$ ]] && [[ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null)" == "$expected" ]] && runuser -u veyl -- /usr/bin/node "$expected/scripts/check-worker.mjs" >/dev/null 2>&1; then return 0; fi
+    if systemctl is-active --quiet veyl.service && [[ "$pid" =~ ^[1-9][0-9]*$ ]] && [[ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null)" == "$expected" ]] && runuser -u "$service_user" -- /usr/bin/env VEYL_HOME="$base" VEYL_SERVICE_USER="$service_user" /usr/bin/node "$expected/scripts/check-worker.mjs" >/dev/null 2>&1; then return 0; fi
     sleep 1
   done
   return 1

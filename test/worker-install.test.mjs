@@ -14,7 +14,16 @@ test('worker configuration generates independent private keys and rejects spendi
     raw.replace('VEYL_MAX_ACTIVE_RUNTIMES=1', 'VEYL_MAX_ACTIVE_RUNTIMES=20'),
     raw + 'VEYL_OPERATOR_KEY=not-authorized\n', raw + 'PORT=4320\n', raw.replace(generated[1], generated[0]), raw.replace(generated[0], 'invalid')
   ]) assert.throws(() => validateWorkerEnvironment(changed));
-  assert.equal(workerEnvironment().VEYL_DATA_DIR, '/home/veyl/veyl/worker-data/production');
+  assert.equal(workerEnvironment({}).VEYL_DATA_DIR, '/home/veyl/veyl/worker-data/production');
+});
+
+test('existing hosts validate private path overrides without changing their saved environment', () => {
+  const env = { VEYL_HOME: '/home/operator/veyl', VEYL_SERVICE_USER: 'operator' };
+  const raw = createWorkerEnvironment(env);
+  assert.equal(validateWorkerEnvironment(raw, env), true);
+  assert.equal(workerEnvironment(env).VEYL_DATA_DIR, '/home/operator/veyl/worker-data/production');
+  assert.equal(workerEnvironment(env).VEYL_ZKAPI_CLIENTD, '/home/operator/veyl/bin/zkapi-clientd-control');
+  assert.throws(() => validateWorkerEnvironment(raw, {}), /differs/);
 });
 
 test('native control verifier rejects foreign or already-patched input rather than applying a loose text patch', () => {
