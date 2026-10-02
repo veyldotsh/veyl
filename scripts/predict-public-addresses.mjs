@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +67,15 @@ export function predictPublicAddresses({ config, startNonce = 0n, creator = conf
     ], missingForTokenPrediction: canonical || projectId ? [] : ['The exact fixed project.id used by the saved Veyl launch workspace.'], chainObservation: null };
 }
 
+export function writeAddressPrediction(file, result) {
+  if (existsSync(file)) {
+    const saved = JSON.parse(readFileSync(file, 'utf8'));
+    if (saved?.token?.status === 'deployed' || saved?.token?.receipt) throw new Error('This file records a confirmed deployment. Use a different output path for address recalculation; the deployment record will not be overwritten.');
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(result, null, 2) + '\n');
+}
+
 async function main() {
   const options = new Map(); const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
@@ -90,7 +99,7 @@ async function main() {
     result.chainObservation = { checkedAt: new Date().toISOString(), rpcHost: url.hostname, blockNumber: blockNumber.toString(), confirmedNonce, pendingNonce, deployerHasCode, nonceSequenceCurrentlyPossible: !deployerHasCode && BigInt(confirmedNonce) === BigInt(result.startingNonce) && confirmedNonce === pendingNonce };
   }
   const file = resolve(ROOT, options.get('--output') || 'output/public-address-predictions.json');
-  mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify(result, null, 2) + '\n');
+  writeAddressPrediction(file, result);
   console.log(JSON.stringify({ output: file, nonceZeroIs: result.deployments[0], token: result.token, chainObservation: result.chainObservation, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') }, null, 2));
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });

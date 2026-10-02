@@ -61,7 +61,7 @@ async function loadProjectModels(id) {
   } catch (error) { if (selected === id && $('model-status')) $('model-status').textContent = error.message; }
 }
 function hostedTreasury(p) {
-  return `<section class="panel"><h2>Operating treasury</h2><p class="subtext">Ethereum mainnet · deployment on hold</p>${p.mainnet ? `<label>Treasury</label><div class="address">${esc(p.mainnet.treasury)}</div>` : '<p>Your market launch creates its token, permanent liquidity vault and operating treasury together. Review the exact terms in the Market tab.</p>'}<div class="fee-legend"><div><b>70%</b><strong>Agent treasury</strong></div><div><b>20%</b><strong>Creator</strong></div><div><b>10%</b><strong>Platform</strong></div></div><p class="hint">Shares of collected trading fees. Treasury ETH and the inference note are separate balances; a funding operation connects them.</p></section><div id="runway-panel">Reading treasury runway…</div><details class="hosted-funding-details"><summary>Inference funding · deposits & activation</summary>${renderFundingPanel(p)}</details>`;
+  return `<section class="panel"><h2>Operating treasury</h2><p class="subtext">${p.mainnet ? 'Verified Ethereum market' : 'Ethereum market setup'}</p>${p.mainnet ? `<label>Treasury</label><div class="address">${esc(p.mainnet.treasury)}</div>` : '<p>Your market launch creates its token, permanent liquidity vault and operating treasury together. Review the exact terms in the Market tab.</p>'}<div class="fee-legend"><div><b>70%</b><strong>Agent treasury</strong></div><div><b>20%</b><strong>Creator</strong></div><div><b>10%</b><strong>Platform</strong></div></div><p class="hint">Shares of collected trading fees. Treasury ETH and the inference note are separate balances; a funding operation connects them.</p></section><div id="runway-panel">Reading treasury runway…</div><details class="hosted-funding-details"><summary>Inference funding · deposits & activation</summary>${renderFundingPanel(p)}</details>`;
 }
 function renderHostedTools() {
   const items = [
@@ -69,7 +69,7 @@ function renderHostedTools() {
     ['Persistent memory', 'Encrypted storage', 'Notes, sources and deliverables survive restarts and stay in your wallet-owned workspace. The operator can decrypt hosted state.'],
     ['Source reader', 'Available', 'Fetch bounded public documents from the supported domains, then include them in your agent’s task.'],
     ['Scheduled tasks', 'Available', 'The worker runs scheduled jobs with daily and total limits. Budget or service failures pause the schedule.'],
-    ['Ethereum markets', 'Deployment on hold', 'Prepare explicit launch terms and inspect exact wallet transactions. No Veyl contracts have been deployed on Ethereum.'],
+    ['Ethereum markets', 'Wallet transaction review', 'Inspect market terms, balances and exact wallet transactions. Confirmed deployments and trades are checked against Ethereum receipts.'],
     ['Social accounts', 'Project connections', 'Connect X or a Telegram bot in an agent’s Connections tab. Review exact drafts before publishing; server publishing must also be enabled.']
   ];
   return `<section class="overview-head"><div><p class="eyebrow">A CAPABLE WORKSPACE</p><h1>Tools, with clear boundaries.</h1><p>Funding and model settings live in each agent’s workspace.</p></div></section><div class="tool-grid">${items.map(([name, status, detail]) => `<article class="tool"><h3>${name}</h3><span class="tool-state">${status}</span><p>${detail}</p></article>`).join('')}</div>`;

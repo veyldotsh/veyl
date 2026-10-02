@@ -138,8 +138,10 @@ funds, signs, calls a model, connects social accounts or changes production flag
 
 Prepare a new exclusive daemon profile and fill a copy of
 `deployment/acceptance.example.json` with public addresses, an exact deposit,
-the selected model's request ceiling, a total of two to four calls, and separate
-deposit-inclusive and withdrawal-gas limits. Keep its recovery directory. Never
+the selected model's request ceiling plus the $0.001 accounting margin per call,
+a total of two to four calls, and separate deposit-inclusive and withdrawal-gas
+limits. Both per-call and total approved budgets must include that margin.
+Keep its recovery directory. Never
 add wallet keys or local API credentials to that JSON. The dedicated public
 payment address must be funded separately after explicit approval; the harness
 has no treasury signer or funding-transfer function.
@@ -171,8 +173,11 @@ public identities and call status, not credentials or signed transactions.
 
 The deployed zkAPI manifest currently specifies `native_eth`, `gwei`, and no
 billing token. Veyl's USD limits are spending ceilings, not USDC deposits or
-verified invoices. For a small future check, the example allows two requests
-with a combined $2 ceiling. The public billing quote with update time 2026-10-01
+verified invoices. The example's $1 per-call and $2 total ceilings already include
+the $0.001 reservation margin per call, so it can select only a model with a catalog
+cap of at most $0.999. A $1 catalog cap instead requires a newly reviewed plan with
+at least $1.001 per call and $2.002 for two calls; the harness never raises approved
+limits automatically. The public billing quote with update time 2026-10-01
 22:30:59 UTC priced ETH at $2,698.84668531: $2 converted upward to 741,058 gwei
 (0.000741058 ETH). This dated principal estimate excludes deposit and withdrawal
 gas and is not a final funding instruction. Refresh the quote and obtain the

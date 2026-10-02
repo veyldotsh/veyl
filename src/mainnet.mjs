@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  createPublicClient, encodeAbiParameters, encodeDeployData, encodeFunctionData, erc20Abi, erc721Abi, BaseError, ContractFunctionRevertedError,
+  createPublicClient, decodeFunctionData, encodeAbiParameters, encodeDeployData, encodeFunctionData, erc20Abi, erc721Abi, BaseError, ContractFunctionRevertedError,
   formatEther, getAddress, getContractAddress, getCreate2Address, http, isAddress, keccak256, parseEther,
   parseEventLogs, stringToHex, toHex, zeroAddress
 } from 'viem';
@@ -122,6 +122,55 @@ export class MainnetMarkets {
       ...(this.mainPosition(project) ? { mainTokenLaunch: this.config.mainTokenLaunch } : {}),
       launchProtection: this.protectedPreset(project), launchLimits: { maxTransactionTokens: '20000000', maxWalletTokens: '20000000', blocks: 10 },
       launchType: 'direct-uniswap-v4', automatedSigning: false };
+  }
+  /** Adopt only the reviewed six-transaction platform launch. Historical calldata
+   * is decoded and checked before using the existing receipt/runtime verifier on
+   * an isolated candidate. No imported file, signer or arbitrary market is accepted. */
+  async adoptMainnet(project, input, checkpoint) {
+    if (!checkpoint) throw new Problem('Durable project storage is required.', 500);
+    const account = nonzero(input.account, 'owner'), deployer = nonzero(this.config.addresses?.deployer, 'configured deployer');
+    if (!this.mainPosition(project) || !equal(account, deployer) || !equal(account, this.config.addresses?.owner)) throw new Problem('Only the configured owner can import the canonical Veyl platform launch.', 403);
+    if (!/^0x[\da-f]{64}$/i.test(input.transactionHash || '')) throw new Problem('Enter the exact confirmed platform launch transaction hash.');
+    if (project.mainnet) {
+      if (!equal(project.mainnet.hash, input.transactionHash)) throw new Problem('This workspace already has another verified launch.', 409);
+      await this.validateMarket(project);
+      if (!equal(await this.read(project.mainnet.treasury, 'AgentTreasury', 'owner'), account)) throw new Problem('This wallet is no longer the platform treasury owner.', 403);
+      return serialize(project.mainnet);
+    }
+    if (project.mainnetPlan || project.mainnetIntents?.some(item => !['confirmed', 'failed'].includes(item.status))) throw new Problem('Recover this workspace’s existing intent before importing another launch.', 409);
+    await this.checkChain();
+    const factory = getContractAddress({ from: deployer, nonce: 4n });
+    if ((this.config.deployments?.marketFactory && !equal(this.config.deployments.marketFactory, factory)) || (project.mainnetInfrastructure?.factory && !equal(project.mainnetInfrastructure.factory, factory))) throw new Problem('The configured factory differs from the canonical deployment sequence.', 409);
+    const tx = await this.client.getTransaction({ hash: input.transactionHash });
+    if (!equal(tx.from, account) || !equal(tx.to, factory) || tx.chainId !== 1 || tx.nonce !== 5 || tx.value !== 0n) throw new Problem('The transaction is not the reviewed zero-value platform launch.', 409);
+    let decoded;
+    try { decoded = decodeFunctionData({ abi: this.artifact('VeylMarketFactory').abi, data: tx.input }); } catch { throw new Problem('The transaction does not contain a valid platform launch.', 409); }
+    if (decoded.functionName !== 'launch') throw new Problem('The transaction is not a platform launch.', 409);
+    const [config, hookSalt] = decoded.args;
+    const { config: expected } = this.launchConfig(project, { account, treasuryOwner: account, operator: account, treasuryEth: '0', dailyLimitEth: '0' }, 0n);
+    Object.assign(expected, { liquidity: 43827373799693085948824n, maxToken: 980000000000000000000012538n, deadline: config.deadline });
+    if (Object.keys(expected).some(field => typeof expected[field] === 'string' ? !equal(expected[field], config[field]) : expected[field] !== config[field]) ||
+        !equal(tx.input, encodeFunctionData({ abi: this.artifact('VeylMarketFactory').abi, functionName: 'launch', args: [expected, hookSalt] }))) throw new Problem('The launch differs from the reviewed platform owner, salt, zero funding or exact liquidity terms.', 409);
+    const candidate = { ...project, mainnetInfrastructure: { ...project.mainnetInfrastructure, factory } }, infra = await this.infrastructure(candidate);
+    for (const [index, stage] of this.stages(project).entries()) if (!equal(infra[stage.field], getContractAddress({ from: deployer, nonce: BigInt(index) }))) throw new Problem('Platform infrastructure differs from the canonical nonce sequence.', 409);
+    const id = keccak256(encodeAbiParameters([{ type: 'address' }, { type: 'bytes32' }], [account, VEYL_MAIN_TOKEN_SALT]));
+    const [predictedId, predicted] = await this.read(factory, 'VeylMarketFactory', 'predictLaunch', [account, config, hookSalt]);
+    const tokenArtifact = this.artifact('AgentToken'), tokenCode = encodeDeployData({ abi: tokenArtifact.abi, bytecode: tokenArtifact.bytecode.object, args: ['Veyl', 'VEYL', factory, true, ETHEREUM_POOL_MANAGER] });
+    const token = getCreate2Address({ from: infra.projectDeployer, salt: id, bytecodeHash: keccak256(tokenCode) });
+    if (!equal(predictedId, id) || !equal(predicted.token, token) || !equal(predicted.creator, account) || !equal(predicted.treasuryOwner, account)) throw new Problem('The launch prediction does not match the canonical platform token and owner.', 409);
+    candidate.mainnetPlan = serialize({ ...infra, account, config, id, hookSalt, predicted, tokenUsed: config.maxToken, quoteUsed: 0n, tokenIsCurrency0: false, creatorTokens: SUPPLY - config.maxToken,
+      fingerprint: keccak256(stringToHex(JSON.stringify(serialize({ account, factory, ...config, deadline: 0n })))) });
+    const intent = { id: randomUUID(), kind: 'launch', status: 'prepared', account, chainId: 1, marketId: id, createdAt: this.now(), expiresAt: this.now(), source: 'verified-platform-adoption',
+      transaction: { from: account, to: factory, data: tx.input, value: '0x0', chainId: '0x1' } };
+    intent.digest = keccak256(stringToHex(JSON.stringify(intent.transaction)));
+    candidate.mainnetIntents = [...(project.mainnetIntents || []), intent];
+    const result = await this.verify(candidate, { intentId: intent.id, transactionHash: input.transactionHash }, () => {});
+    if (result.status !== 'confirmed') throw new Problem('Wait for the required canonical Ethereum confirmations before importing.', 409);
+    if (!equal(await this.read(candidate.mainnet.treasury, 'AgentTreasury', 'owner'), account)) throw new Problem('This wallet is no longer the platform treasury owner.', 403);
+    candidate.mainnetInfrastructure = serialize(infra);
+    // Only fully verified candidates reach the tenant's durable state.
+    Object.assign(project, { mainnet: candidate.mainnet, mainnetPlan: candidate.mainnetPlan, mainnetInfrastructure: candidate.mainnetInfrastructure, mainnetIntents: candidate.mainnetIntents });
+    checkpoint(); return serialize(project.mainnet);
   }
   async checkChain() {
     if (await this.client.getChainId() !== 1) throw new Problem('Ethereum integration requires chain ID 1. No transaction was prepared.', 409);

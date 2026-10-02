@@ -459,7 +459,7 @@ export function createProductionApp({ auth, registry, gateway, origin, mainnet, 
             kit.operations.add(project.id);
             try {
               const input = { ...body, account: session.address };
-              const method = { factory: 'prepareFactory', launch: 'prepareLaunch', quote: 'quote', swap: 'prepareSwap', maintenance: 'prepareMaintenance', verify: 'verify' }[parts[4]];
+              const method = { factory: 'prepareFactory', launch: 'prepareLaunch', adopt: 'adoptMainnet', quote: 'quote', swap: 'prepareSwap', maintenance: 'prepareMaintenance', verify: 'verify' }[parts[4]];
               if (!method) throw new Problem('Not found.', 404);
               return json(200, await mainnet[method](project, input, checkpoint));
             } finally { kit.operations.delete(project.id); }
