@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "dependencies": [
+    { "name": "openzeppelin-contracts", "repository": "https://github.com/OpenZeppelin/openzeppelin-contracts.git", "commit": "cab19933c33c2ad1d4c7a84864a3601dddfd16f3" },
+    { "name": "forge-std", "repository": "https://github.com/foundry-rs/forge-std.git", "commit": "bf647bd6046f2f7da30d0c2bf435e5c76a780c1b" },
+    { "name": "v4-core", "repository": "https://github.com/Uniswap/v4-core.git", "commit": "59d3ecf53afa9264a16bba0e38f4c5d2231f80bc" },
+    { "name": "v4-periphery", "repository": "https://github.com/Uniswap/v4-periphery.git", "commit": "dce236d4e2057422d0791d9a973a58765eb46f65" },
+    { "name": "solmate", "repository": "https://github.com/transmissions11/solmate.git", "commit": "4b47a19038b798b4a33d9749d25e570443520647" }
+  ]
+}

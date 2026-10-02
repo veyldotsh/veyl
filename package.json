@@ -1,0 +1,28 @@
+{
+  "name": "veyl-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs contracts/*.test.mjs",
+    "setup:contracts": "node scripts/install-contract-deps.mjs",
+    "build": "node scripts/build-site.mjs",
+    "start:production": "node src/production.mjs",
+    "check:web": "node scripts/check-web.mjs",
+    "check:local-revenue": "node scripts/check-local-revenue.mjs",
+    "test:contracts": "forge test --root contracts",
+    "preflight:mainnet": "node scripts/preflight-mainnet.mjs",
+    "check:local-market": "node scripts/check-local-market.mjs"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "viem": "2.57.2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.2.0",
+    "zod": "4.6.5"
+  }
+}

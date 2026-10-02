@@ -1,0 +1,43 @@
+{
+  "chainId": 1,
+  "project": {
+    "name": "Veyl",
+    "symbol": "VEYL"
+  },
+  "addresses": {
+    "deployer": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+    "owner": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+    "operator": null,
+    "protocolRecipient": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+    "poolInitializer": null
+  },
+  "funding": {
+    "initialTreasuryEth": null,
+    "dailyTreasuryLimitEth": null,
+    "initialLiquidityEth": null,
+    "initialLiquidityTokens": null
+  },
+  "agentMarkets": {
+    "mainMarketFactory": null,
+    "quoteAsset": null,
+    "conversionSwapRouter": null,
+    "marketFactory": null
+  },
+  "trading": {
+    "buyFeeBps": 180,
+    "sellFeeBps": 180,
+    "lpFeePips": 0,
+    "tickSpacing": 200,
+    "launchProtection": true,
+    "initialSqrtPriceX96": null,
+    "liquidityCustodyPolicy": "The actual seeded v4 position and any LP fees remain permanently in VeylLiquidityVault. Unused seed inputs and the unallocated token remainder return to the creator; exact launch amounts remain pending approval."
+  },
+  "zkapi": {
+    "daemonHostPlan": "Installed prelaunch shared-VPS pilot: one running job and daemon pair, fifty saved profiles, two CPU cores and 4 GiB aggregate memory cap with no swap. The authenticated gateway is connected; funded execution and mainnet writes remain disabled. Move to a separate server before growing production workloads.",
+    "maxPrepaidEth": null,
+    "reconciliationPolicy": "Reserve the full current catalog cap before each live model call, retain unresolved caps, and never automatically replay uncertain inference. Per-job signed final-charge reconciliation is not available from the current daemon interface; funded lifecycle acceptance remains required."
+  },
+  "confirmations": {
+    "freshSignerConfirmed": false
+  }
+}

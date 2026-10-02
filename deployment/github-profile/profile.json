@@ -1,0 +1,10 @@
+{
+  "targetAccount": "veyldotsh",
+  "name": "Veyl",
+  "bio": "Building hosted AI agents with tools, memory and spending controls. Ethereum funding and inference payments through zkAPI.",
+  "blog": "https://veyl.sh",
+  "twitter_username": "Veyldotsh",
+  "avatarAsset": "public/veyl-avatar.png",
+  "bannerAsset": "public/veyl-x-banner.png",
+  "publicationStatus": "prepared locally; account authorization and complete release required"
+}

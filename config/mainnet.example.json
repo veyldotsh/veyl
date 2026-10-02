@@ -1,0 +1,10 @@
+{
+  "chainId": 1,
+  "project": { "name": null, "symbol": null },
+  "addresses": { "deployer": null, "owner": null, "operator": null, "protocolRecipient": null, "poolInitializer": null },
+  "agentMarkets": { "mainMarketFactory": null, "quoteAsset": null, "conversionSwapRouter": null, "marketFactory": null },
+  "funding": { "initialTreasuryEth": null, "dailyTreasuryLimitEth": null, "initialLiquidityEth": null, "initialLiquidityTokens": null },
+  "trading": { "buyFeeBps": null, "sellFeeBps": null, "lpFeePips": null, "tickSpacing": null, "initialSqrtPriceX96": null, "liquidityCustodyPolicy": null, "launchProtection": null },
+  "zkapi": { "daemonHostPlan": null, "maxPrepaidEth": null, "reconciliationPolicy": null },
+  "confirmations": { "freshSignerConfirmed": false }
+}

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "runId": "REPLACE_WITH_NEW_UUID",
+  "daemonOrigin": "http://127.0.0.1:19000",
+  "expectedFundingAddress": "REPLACE_WITH_DEDICATED_DAEMON_PUBLIC_ADDRESS",
+  "model": "REPLACE_WITH_MODEL_FROM_READ_ONLY_CATALOG",
+  "depositGwei": "REPLACE_WITH_EXPLICIT_DEPOSIT_GWEI",
+  "maxDepositTotalWei": "REPLACE_WITH_DEPOSIT_PLUS_GAS_CEILING_WEI",
+  "maxRequestMicroUsd": 1000000,
+  "maxCalls": 2,
+  "maxTotalMicroUsd": 2000000,
+  "withdrawalDestination": "REPLACE_WITH_YOUR_REVIEWED_PUBLIC_RECOVERY_ADDRESS",
+  "maxWithdrawalFeeWei": "REPLACE_WITH_WITHDRAWAL_GAS_CEILING_WEI",
+  "exclusiveProfile": true
+}

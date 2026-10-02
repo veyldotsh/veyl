@@ -1,0 +1,10 @@
+.social-panel>.section-title,.social-panel .panel>.section-title{margin-top:0}
+.social-panel fieldset{border:0;margin:0;padding:0;min-width:0}
+.social-panel .panel{min-width:0}.social-panel .two-col{gap:18px}
+.social-outbox{margin-top:18px}.social-panel .artifact{padding:14px 0}
+.social-panel .artifact p{font-size:12px;overflow-wrap:anywhere;margin:10px 0}
+.social-review h3{margin:0}.social-panel .social-copy{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:16px;font-family:inherit;font-size:13px;line-height:1.8}
+.social-review>.choice{margin-top:16px}.social-review .choice span{font-size:11px}
+.social-panel .section-title p{overflow-wrap:anywhere}.social-panel .address{overflow-wrap:anywhere;font-size:10px}
+.social-panel input[type=password]{font-family:system-ui,sans-serif}
+@media(max-width:760px){.social-panel .two-col{gap:14px}.social-panel>.section-title{gap:12px}.social-panel .social-copy{max-height:210px}.social-outbox{margin-top:14px}}

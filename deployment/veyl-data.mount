@@ -1,0 +1,13 @@
+[Unit]
+Description=Veyl bounded private data filesystem
+Before=veyl.service
+
+[Mount]
+What=/home/veyl/veyl/worker-data.ext4
+Where=/home/veyl/veyl/worker-data
+Type=ext4
+Options=loop,nodev,nosuid,noexec
+TimeoutSec=30
+
+[Install]
+WantedBy=multi-user.target

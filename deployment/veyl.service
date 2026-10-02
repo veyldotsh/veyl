@@ -1,0 +1,41 @@
+[Unit]
+Description=Veyl agent runtime
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/home/veyl/veyl/worker-data
+ConditionPathIsMountPoint=/home/veyl/veyl/worker-data
+
+[Service]
+Type=simple
+User=veyl
+Group=veyl
+WorkingDirectory=/home/veyl/veyl/current
+EnvironmentFile=/home/veyl/veyl/runtime.env
+Environment=NODE_OPTIONS=--max-old-space-size=384
+ExecStart=/usr/bin/node src/production.mjs
+ExecStartPre=/usr/bin/mountpoint -q /home/veyl/veyl/worker-data
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=210
+KillSignal=SIGTERM
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/veyl/veyl/worker-data
+RestrictSUIDSGID=true
+LockPersonality=true
+LimitNOFILE=4096
+MemoryMax=4G
+MemoryHigh=3G
+MemorySwapMax=0
+CPUQuota=200%
+Nice=10
+IOWeight=25
+TasksMax=128
+LogNamespace=veyl
+
+[Install]
+WantedBy=multi-user.target

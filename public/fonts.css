@@ -1,0 +1,2 @@
+/* Uses installed serif fonts; no external font or analytics requests. */
+@font-face{font-family:KitSerif;src:local('Baskerville'),local('Palatino Linotype'),local('Georgia');font-style:normal;font-weight:400;font-display:swap}

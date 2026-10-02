@@ -1,0 +1,12 @@
+.git
+.github
+.env*
+.vercel
+data
+output
+contracts
+test
+deployment
+node_modules
+*.log
+*.env

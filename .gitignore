@@ -1,0 +1,15 @@
+data/
+.env
+*.log
+node_modules/
+contracts/out/
+contracts/cache/
+output/
+contracts/lib/
+dist/
+.vercel/
+.env.*
+!deployment/runtime.env.example
+dist/
+.vercel/
+*.env

@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { parseEther } from 'viem';
+import { LocalChain } from '../src/chain.mjs';
+
+// Opt-in integration check: creates disposable contracts on loopback Anvil only.
+const chain = new LocalChain();
+const project = { id: randomUUID(), name: 'Allocation Check', symbol: 'CHECK' };
+project.chain = await chain.launch(project);
+const initial = await chain.revenueStatus(project);
+assert.deepEqual(initial.allocation, { treasuryBps: 7000, creatorBps: 2000, protocolBps: 1000 });
+assert.equal(await chain.balance(project), '0.05');
+const receipt = await chain.testRevenue(project, () => {});
+assert.deepEqual(receipt.claimable, { treasury: '0.007', creator: '0.002', platform: '0.001' });
+assert.equal(await chain.balance(project), '0.05', 'Claimable funds stay in the router until delivered');
+const creatorBefore = await chain.client.getBalance({ address: initial.recipients.creator });
+const platformBefore = await chain.client.getBalance({ address: initial.recipients.platform });
+const delivered = await chain.distributeRevenue(project);
+assert.deepEqual(delivered.claimable, { treasury: '0', creator: '0', platform: '0' });
+assert.equal(await chain.balance(project), '0.057');
+assert.equal(await chain.client.getBalance({ address: initial.recipients.platform }), platformBefore + parseEther('0.001'));
+const transactions = await Promise.all(delivered.hashes.map(hash => chain.client.getTransactionReceipt({ hash })));
+const gas = transactions.reduce((sum, tx) => sum + tx.gasUsed * tx.effectiveGasPrice, 0n);
+assert.equal(await chain.client.getBalance({ address: initial.recipients.creator }), creatorBefore + parseEther('0.002') - gas);
+assert.equal((await chain.distributeRevenue(project)).hashes.length, 0, 'No duplicate payout');
+await chain.fund(project);
+assert.equal(await chain.balance(project), '0.067', 'Direct top-ups are not split');
+const old = { ...project, chain: { ...project.chain } }; delete old.chain.revenueRouter; delete old.chain.platform;
+let checkpoints = 0;
+await chain.testRevenue(old, () => { checkpoints++; assert.ok(old.chain.revenueRouter); });
+assert.equal(checkpoints, 1, 'Legacy project router is saved before funding');
+assert.deepEqual((await chain.revenueStatus(old)).claimable, receipt.claimable);
+await assert.rejects(chain.revenueStatus({ ...project, chain: { ...project.chain, owner: project.chain.platform } }), /does not match/);
+console.log('PASS: factory wiring, 70/20/10 onchain allocation, exact payouts after gas, no duplicate payout, unsplit top-ups, legacy setup and mismatched-router rejection. Anvil development ETH only.');
