@@ -1,3 +1,89 @@
+diff --git a/rust/crates/zkapi-client/src/journal.rs b/rust/crates/zkapi-client/src/journal.rs
+index 0858ba9..c004f7c 100644
+--- a/rust/crates/zkapi-client/src/journal.rs
++++ b/rust/crates/zkapi-client/src/journal.rs
+@@ -5,8 +5,6 @@
+ //! entry is written *before* calling the server and cleared only after the
+ //! resulting next state has been persisted atomically.
+ 
+-use std::fs;
+-use std::io::Write;
+ use std::path::Path;
+ 
+ use serde::{Deserialize, Serialize};
+@@ -42,29 +40,19 @@ impl PendingRequestJournal {
+     ///
+     /// Uses write-to-temp-then-rename to guarantee crash safety.
+     pub fn write(path: &Path, journal: &PendingRequestJournal) -> Result<(), ClientError> {
+-        let json = serde_json::to_string_pretty(journal)
+-            .map_err(|e| ClientError::Serialization(e.to_string()))?;
+-
+-        if let Some(parent) = path.parent() {
+-            fs::create_dir_all(parent)?;
+-        }
+-
+-        let tmp_path = path.with_extension("tmp");
+-        write_private_file(&tmp_path, json.as_bytes())?;
+-        fs::rename(&tmp_path, path)?;
+-        Ok(())
++        // A rename alone is not durable across a host crash. Use the same
++        // private, file-and-directory-fsynced writer as settlement commits.
++        crate::settlement::write(path, journal)?;
++        crate::settlement::checkpoint("pending-journal-saved")
+     }
+ 
+     /// Read the journal from disk, if it exists.
+     ///
+     /// Returns `None` when no journal file is present (normal steady state).
+     pub fn read(path: &Path) -> Result<Option<PendingRequestJournal>, ClientError> {
+-        if !path.exists() {
++        let Some(journal): Option<PendingRequestJournal> = crate::settlement::read(path)? else {
+             return Ok(None);
+-        }
+-        let data = fs::read_to_string(path)?;
+-        let journal: PendingRequestJournal =
+-            serde_json::from_str(&data).map_err(|e| ClientError::Serialization(e.to_string()))?;
++        };
+         if journal.exists {
+             Ok(Some(journal))
+         } else {
+@@ -75,34 +63,14 @@ impl PendingRequestJournal {
+     /// Delete the journal file after the next state has been persisted
+     /// successfully.
+     pub fn clear(path: &Path) -> Result<(), ClientError> {
+-        if path.exists() {
+-            fs::remove_file(path)?;
+-        }
+-        Ok(())
+-    }
+-}
+-
+-fn write_private_file(path: &Path, bytes: &[u8]) -> Result<(), ClientError> {
+-    let mut options = fs::OpenOptions::new();
+-    options.create(true).truncate(true).write(true);
+-    #[cfg(unix)]
+-    {
+-        use std::os::unix::fs::OpenOptionsExt;
+-        options.mode(0o600);
+-    }
+-    let mut file = options.open(path)?;
+-    #[cfg(unix)]
+-    {
+-        use std::os::unix::fs::PermissionsExt;
+-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
++        crate::settlement::clear(path)
+     }
+-    file.write_all(bytes)?;
+-    Ok(())
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use std::fs;
+     use std::path::PathBuf;
+ 
+     fn test_dir(name: &str) -> PathBuf {
 diff --git a/rust/crates/zkapi-client/src/lib.rs b/rust/crates/zkapi-client/src/lib.rs
 index 62c8584..5af1d02 100644
 --- a/rust/crates/zkapi-client/src/lib.rs
@@ -171,7 +257,7 @@ index 0000000..34d6cbf
 +    Ok(())
 +}
 diff --git a/rust/crates/zkapi-client/src/wallet_v2.rs b/rust/crates/zkapi-client/src/wallet_v2.rs
-index 6c11ee2..cded384 100644
+index 6c11ee2..952c423 100644
 --- a/rust/crates/zkapi-client/src/wallet_v2.rs
 +++ b/rust/crates/zkapi-client/src/wallet_v2.rs
 @@ -21,6 +21,7 @@ use crate::config::{ClientConfig, ClientProofMode};
@@ -199,7 +285,19 @@ index 6c11ee2..cded384 100644
      }
  
      pub fn state(&self) -> Option<&NoteState> {
-@@ -129,14 +132,19 @@ impl Wallet {
+@@ -58,9 +61,8 @@ impl Wallet {
+ 
+     pub fn has_pending_request(&self) -> bool {
+         PendingRequestJournal::read(&self.journal_path)
+-            .ok()
+-            .flatten()
+-            .is_some()
++            .map(|journal| journal.is_some())
++            .unwrap_or(true)
+     }
+ 
+     pub fn get_pending_journal(&self) -> Result<Option<PendingRequestJournal>, ClientError> {
+@@ -129,14 +131,19 @@ impl Wallet {
          merkle_siblings: Vec<Felt252>,
      ) -> Result<RequestResponseV2, ClientError> {
          let request = self.prepare_request(payload, payload_hash, active_root, merkle_siblings)?;
@@ -225,16 +323,18 @@ index 6c11ee2..cded384 100644
          let response = crate::testnet_auth::check_response(response)?;
          let status = response.status();
          let body = response
-@@ -172,6 +180,8 @@ impl Wallet {
+@@ -172,7 +179,9 @@ impl Wallet {
          active_root: Felt252,
          merkle_siblings: Vec<Felt252>,
      ) -> Result<ApiRequestV2, ClientError> {
+-        if self.has_pending_request() {
 +        self.resume_settlement()?;
 +        settlement::capacity(self.state_path.parent().ok_or_else(settlement::invalid)?)?;
-         if self.has_pending_request() {
++        if PendingRequestJournal::read(&self.journal_path)?.is_some() {
              return Err(ClientError::PendingRequest);
          }
-@@ -272,19 +282,75 @@ impl Wallet {
+         if canonical_payload_hash(payload.as_bytes()) != payload_hash {
+@@ -272,19 +281,75 @@ impl Wallet {
          &mut self,
          response: &RequestResponseV2,
      ) -> Result<(), ClientError> {
@@ -316,7 +416,7 @@ index 6c11ee2..cded384 100644
          let current = balance_commitment(
              state.current_balance,
              &parse_scalar(&state.balance_blinding)?,
-@@ -293,17 +359,98 @@ impl Wallet {
+@@ -293,17 +358,98 @@ impl Wallet {
          ensure_stored_commitment(state, &current)?;
          let anonymous = rerandomize(&current, &journal.user_rerandomization)
              .map_err(|error| ClientError::VerificationFailed(error.to_string()))?;
@@ -418,7 +518,7 @@ index 6c11ee2..cded384 100644
      /// Clear a request that the server explicitly rejected before reserving its
      /// nullifier (for example because the indexer root was stale).
      pub fn clear_pending_request(&self) -> Result<(), ClientError> {
-@@ -314,14 +461,19 @@ impl Wallet {
+@@ -314,14 +460,19 @@ impl Wallet {
          let Some(journal) = PendingRequestJournal::read(&self.journal_path)? else {
              return Ok(None);
          };
@@ -443,7 +543,7 @@ index 6c11ee2..cded384 100644
          let response = crate::testnet_auth::check_response(response)?;
          if response.status() == reqwest::StatusCode::NOT_FOUND {
              return Ok(None);
-@@ -451,16 +603,21 @@ impl Wallet {
+@@ -451,16 +602,21 @@ impl Wallet {
          &self,
          nullifier: &Felt252,
      ) -> Result<ClearanceResponseV2, ClientError> {
@@ -473,7 +573,7 @@ index 6c11ee2..cded384 100644
          let response = crate::testnet_auth::check_response(response)?;
          let status = response.status();
          let body = response
-@@ -473,14 +630,16 @@ impl Wallet {
+@@ -473,14 +629,16 @@ impl Wallet {
          serde_json::from_str(&body).map_err(|error| ClientError::InvalidResponse(error.to_string()))
      }
  
@@ -493,7 +593,7 @@ index 6c11ee2..cded384 100644
          if response.client_request_id != request_id || response.request_nullifier != nullifier {
              return Err(ClientError::VerificationFailed(
                  "response request identity mismatch".to_string(),
-@@ -491,11 +650,6 @@ impl Wallet {
+@@ -491,11 +649,6 @@ impl Wallet {
                  "response payload hash mismatch".to_string(),
              ));
          }
@@ -505,7 +605,7 @@ index 6c11ee2..cded384 100644
          if response.charge_applied > cap || response.next_anchor.is_zero() {
              return Err(ClientError::VerificationFailed(
                  "invalid charge or next anchor".to_string(),
-@@ -512,7 +666,6 @@ impl Wallet {
+@@ -512,7 +665,6 @@ impl Wallet {
                  "next commitment algebra mismatch".to_string(),
              ));
          }
@@ -513,7 +613,7 @@ index 6c11ee2..cded384 100644
          let message = core::state_message(
              state.protocol_version,
              state.chain_id,
-@@ -549,9 +702,7 @@ impl Wallet {
+@@ -549,9 +701,7 @@ impl Wallet {
          next.current_anchor = response.next_anchor;
          next.is_genesis = false;
          next.state_signature = Some(response.next_state_signature);
@@ -524,7 +624,7 @@ index 6c11ee2..cded384 100644
      }
  
      fn setup_dir(&self) -> &str {
-@@ -605,3 +756,204 @@ fn state_note_leaf(state: &NoteState) -> Felt252 {
+@@ -605,3 +755,233 @@ fn state_note_leaf(state: &NoteState) -> Felt252 {
          state.expiry_ts,
      )
  }
@@ -613,6 +713,35 @@ index 6c11ee2..cded384 100644
 +        )
 +        .unwrap();
 +        (directory, wallet, response)
++    }
++
++    #[test]
++    fn settlement_corrupt_pending_journal_blocks_preparation_without_overwrite() {
++        let (directory, mut wallet, _) = fixture(7);
++        let corrupt = b"{\"exists\":true,\"client_request_id\":";
++        std::fs::write(&wallet.journal_path, corrupt).unwrap();
++        assert!(wallet.has_pending_request());
++        assert!(wallet
++            .prepare_request("new", canonical_payload_hash(b"new"), Felt252::ONE, vec![])
++            .is_err());
++        assert_eq!(std::fs::read(&wallet.journal_path).unwrap(), corrupt);
++        assert_eq!(wallet.state().unwrap().current_balance, 1000);
++        std::fs::remove_dir_all(directory).unwrap();
++    }
++
++    #[test]
++    fn settlement_pending_journal_survives_interrupted_preparation() {
++        let (directory, wallet, _) = fixture(7);
++        let journal = wallet.get_pending_journal().unwrap().unwrap();
++        settlement::FAIL_AFTER.with(|fail| fail.set(Some("pending-journal-saved")));
++        assert!(PendingRequestJournal::write(&wallet.journal_path, &journal).is_err());
++        settlement::FAIL_AFTER.with(|fail| fail.set(None));
++        let reopened = Wallet::new(config(&directory)).unwrap();
++        assert!(
++            settlement::equal(&reopened.get_pending_journal().unwrap().unwrap(), &journal).unwrap()
++        );
++        assert!(reopened.has_pending_request());
++        std::fs::remove_dir_all(directory).unwrap();
 +    }
 +
 +    #[test]

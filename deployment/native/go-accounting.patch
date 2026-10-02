@@ -1,0 +1,669 @@
+diff --git a/zkapi-clientd/internal/accounting/context.go b/zkapi-clientd/internal/accounting/context.go
+new file mode 100644
+index 0000000..f040f4b
+--- /dev/null
++++ b/zkapi-clientd/internal/accounting/context.go
+@@ -0,0 +1,33 @@
++// Package accounting carries local-only durable admission metadata. It never
++// becomes provider JSON or a provider request header.
++package accounting
++
++import (
++	"context"
++	"regexp"
++)
++
++type Admission struct {
++	CallID           string
++	JournalID        string
++	ReservedMicroUSD uint64
++}
++type contextKey struct{}
++
++var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
++var journalPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
++
++func ValidCallID(v string) bool {
++	return uuidPattern.MatchString(v) && v != "00000000-0000-0000-0000-000000000000"
++}
++func ValidJournalID(v string) bool { return journalPattern.MatchString(v) }
++func (a Admission) Valid() bool {
++	return ValidCallID(a.CallID) && ValidJournalID(a.JournalID) && a.ReservedMicroUSD > 0 && a.ReservedMicroUSD <= 1_000_000_000
++}
++func WithAdmission(ctx context.Context, a Admission) context.Context {
++	return context.WithValue(ctx, contextKey{}, a)
++}
++func FromContext(ctx context.Context) (Admission, bool) {
++	a, ok := ctx.Value(contextKey{}).(Admission)
++	return a, ok
++}
+diff --git a/zkapi-clientd/internal/server/accounting_test.go b/zkapi-clientd/internal/server/accounting_test.go
+new file mode 100644
+index 0000000..b361068
+--- /dev/null
++++ b/zkapi-clientd/internal/server/accounting_test.go
+@@ -0,0 +1,96 @@
++package server
++
++import (
++	"context"
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
++)
++
++type accountingBackend struct {
++	fakeBackend
++	reads int
++}
++
++func (b *accountingBackend) Accounting(context.Context) (json.RawMessage, error) {
++	b.reads++
++	return json.RawMessage(`{"version":1,"journal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`), nil
++}
++func (b *accountingBackend) CallSettlement(context.Context, string) (json.RawMessage, error) {
++	b.reads++
++	return json.RawMessage(`{"status":"reserved"}`), nil
++}
++func TestAccountingLookupsAlwaysRequireBearerAndRejectBrowserOrArbitraryPaths(t *testing.T) {
++	for _, tc := range []struct {
++		path, key, origin string
++		want              int
++	}{{"/v1/accounting", "", "", 401}, {"/v1/accounting", testKey, "https://example.com", 403}, {"/v1/accounting", testKey, "", 200}, {"/v1/call-settlements/a0000000-0000-4000-8000-000000000001", testKey, "", 200}, {"/v1/call-settlements/not-uuid", testKey, "", 400}, {"/v1/accounting?secret=x", testKey, "", 404}} {
++		t.Run(tc.path+tc.key+tc.origin, func(t *testing.T) {
++			b := &accountingBackend{}
++			api, _ := New(b, testKey, 1)
++			r := httptest.NewRequest("GET", tc.path, nil)
++			r.Header.Set("Authorization", "Bearer "+tc.key)
++			r.Header.Set("Origin", tc.origin)
++			w := httptest.NewRecorder()
++			api.ServeHTTP(w, r)
++			if w.Code != tc.want {
++				t.Fatalf("got%d want%d", w.Code, tc.want)
++			}
++			if w.Header().Get("Cache-Control") != "no-store" {
++				t.Fatal("cacheable receipt")
++			}
++			if tc.want != 200 && b.reads != 0 {
++				t.Fatal("unauthorized lookup")
++			}
++		})
++	}
++}
++func TestTrackedHeadersAreAuthenticatedCompleteAndLocalOnly(t *testing.T) {
++	for _, kind := range []string{"valid", "no bearer", "partial", "noncanonical", "duplicate"} {
++		t.Run(kind, func(t *testing.T) {
++			calls := 0
++			b := &fakeBackend{complete: func(ctx context.Context, body json.RawMessage) (*http.Response, error) {
++				calls++
++				a, ok := accounting.FromContext(ctx)
++				if !ok || !a.Valid() || a.ReservedMicroUSD != 1001000 {
++					t.Error("admission absent")
++				}
++				if strings.Contains(string(body), "journal") {
++					t.Error("transport leaked into body")
++				}
++				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[]}`))}, nil
++			}}
++			api, _ := New(b, testKey, 1)
++			r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"test"}]}`))
++			r.Header.Set("Content-Type", "application/json")
++			r.Header.Set("Authorization", "Bearer "+testKey)
++			r.Header.Set("X-Veyl-Call-Id", "a0000000-0000-4000-8000-000000000001")
++			r.Header.Set("X-Veyl-Journal-Id", strings.Repeat("a", 32))
++			r.Header.Set("X-Veyl-Reserved-Micro-Usd", "1001000")
++			switch kind {
++			case "no bearer":
++				r.Header.Del("Authorization")
++			case "partial":
++				r.Header.Del("X-Veyl-Journal-Id")
++			case "noncanonical":
++				r.Header.Set("X-Veyl-Reserved-Micro-Usd", "01001000")
++			case "duplicate":
++				r.Header.Add("X-Veyl-Call-Id", "a0000000-0000-4000-8000-000000000002")
++			}
++			w := httptest.NewRecorder()
++			api.ServeHTTP(w, r)
++			if kind == "valid" {
++				if calls != 1 || w.Code != 200 {
++					t.Fatalf("valid admission blocked%d", w.Code)
++				}
++			} else if calls != 0 || w.Code < 400 {
++				t.Fatal("invalid admission dispatched")
++			}
++		})
++	}
++}
+diff --git a/zkapi-clientd/internal/server/server.go b/zkapi-clientd/internal/server/server.go
+index 3c2117b..0b41ae4 100644
+--- a/zkapi-clientd/internal/server/server.go
++++ b/zkapi-clientd/internal/server/server.go
+@@ -12,8 +12,11 @@ import (
+ 	"mime"
+ 	"net"
+ 	"net/http"
++	"strconv"
+ 	"strings"
+ 	"time"
++
++	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
+ )
+ 
+ type Backend interface {
+@@ -77,7 +80,8 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		writeJSON(w, 200, []byte(`{"status":"ok"}`))
+ 		return
+ 	}
+-	keylessInference := !a.RequireAPIKey && (r.URL.Path == "/v1/models" || r.URL.Path == "/v1/chat/completions")
++	tracked := r.Header.Get("X-Veyl-Call-Id") != "" || r.Header.Get("X-Veyl-Journal-Id") != "" || r.Header.Get("X-Veyl-Reserved-Micro-Usd") != ""
++	keylessInference := !a.RequireAPIKey && !tracked && (r.URL.Path == "/v1/models" || r.URL.Path == "/v1/chat/completions")
+ 	if keylessInference {
+ 		if !localInferenceRequest(r) {
+ 			writeError(w, 403, "local_connection_required", "Connect to this API through localhost.")
+@@ -117,6 +121,39 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 		return
+ 	}
+ 	switch {
++	case r.URL.Path == "/v1/accounting" || strings.HasPrefix(r.URL.Path, "/v1/call-settlements/"):
++		backend, ok := a.backend.(interface {
++			Accounting(context.Context) (json.RawMessage, error)
++			CallSettlement(context.Context, string) (json.RawMessage, error)
++		})
++		if !ok || r.Method != http.MethodGet || r.URL.RawQuery != "" {
++			writeError(w, 404, "accounting_unavailable", "Accounting lookup unavailable.")
++			return
++		}
++		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
++		defer cancel()
++		var data json.RawMessage
++		var err error
++		if r.URL.Path == "/v1/accounting" {
++			data, err = backend.Accounting(ctx)
++		} else {
++			callID := strings.TrimPrefix(r.URL.Path, "/v1/call-settlements/")
++			if !accounting.ValidCallID(callID) {
++				writeError(w, 400, "invalid_call_id", "Invalid call identity.")
++				return
++			}
++			data, err = backend.CallSettlement(ctx, callID)
++		}
++		if err != nil {
++			var status interface{ HTTPStatus() int }
++			if errors.As(err, &status) && status.HTTPStatus() == http.StatusNotFound {
++				writeError(w, 404, "accounting_unknown", "No authoritative receipt was found. Keep the reservation.")
++				return
++			}
++			writeError(w, 502, "accounting_unavailable", "No authoritative receipt was available. Keep the reservation.")
++			return
++		}
++		writeJSON(w, 200, data)
+ 	case r.URL.Path == "/v1/models" && r.Method == http.MethodGet:
+ 		ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+ 		defer cancel()
+@@ -226,6 +263,16 @@ func (a *API) complete(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+ 	defer cancel()
++	if r.Header.Get("X-Veyl-Call-Id") != "" || r.Header.Get("X-Veyl-Journal-Id") != "" || r.Header.Get("X-Veyl-Reserved-Micro-Usd") != "" {
++		value := r.Header.Get("X-Veyl-Reserved-Micro-Usd")
++		reserved, err := strconv.ParseUint(value, 10, 64)
++		admission := accounting.Admission{CallID: r.Header.Get("X-Veyl-Call-Id"), JournalID: r.Header.Get("X-Veyl-Journal-Id"), ReservedMicroUSD: reserved}
++		if err != nil || strconv.FormatUint(reserved, 10) != value || !admission.Valid() || len(r.Header.Values("X-Veyl-Call-Id")) != 1 || len(r.Header.Values("X-Veyl-Journal-Id")) != 1 || len(r.Header.Values("X-Veyl-Reserved-Micro-Usd")) != 1 {
++			writeError(w, 400, "invalid_accounting_admission", "A complete durable accounting admission is required.")
++			return
++		}
++		ctx = accounting.WithAdmission(ctx, admission)
++	}
+ 	// Bound total uploads and queued requests while allowing ordinary UI bursts
+ 	// to wait. Read the body before waiting so net/http can notice a disconnected
+ 	// client and cancel its queued request without spending anonymous access.
+diff --git a/zkapi-clientd/internal/zkapi/call_accounting.go b/zkapi-clientd/internal/zkapi/call_accounting.go
+new file mode 100644
+index 0000000..ee3496f
+--- /dev/null
++++ b/zkapi-clientd/internal/zkapi/call_accounting.go
+@@ -0,0 +1,209 @@
++package zkapi
++
++import (
++	"context"
++	"encoding/json"
++	"math/big"
++	"net/http"
++	"regexp"
++	"strconv"
++	"strings"
++
++	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
++)
++
++type AccountingIdentity struct {
++	Version   int    `json:"version"`
++	JournalID string `json:"journal_id"`
++}
++type CallBinding struct {
++	Version              int            `json:"version"`
++	JournalID            string         `json:"journal_id"`
++	CallID               string         `json:"call_id"`
++	SessionID            string         `json:"session_id"`
++	RequestLimitMicroUSD string         `json:"request_limit_micro_usd"`
++	CapUnits             string         `json:"cap_units"`
++	BillingQuote         NativeUSDQuote `json:"billing_quote"`
++}
++type CallReceipt struct {
++	ReceiptID    string `json:"receipt_id"`
++	ChargeUnits  string `json:"charge_units"`
++	BalanceUnits string `json:"balance_units"`
++}
++type CallSettlement struct {
++	Version   int          `json:"version"`
++	JournalID string       `json:"journal_id"`
++	CallID    string       `json:"call_id"`
++	Status    string       `json:"status"`
++	Binding   *CallBinding `json:"binding,omitempty"`
++	Receipt   *CallReceipt `json:"receipt,omitempty"`
++}
++
++var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
++
++func accountingError() error { return &Error{http.StatusBadGateway, "invalid_call_accounting"} }
++func decimalUnits(v string) (*big.Int, bool) {
++	if v == "0" {
++		return new(big.Int), true
++	}
++	return positiveDecimal(v, 128)
++}
++func (c *Client) Accounting(ctx context.Context) (json.RawMessage, error) {
++	if err := c.Check(ctx); err != nil {
++		return nil, err
++	}
++	raw, err := c.request(ctx, http.MethodGet, "/oa/v1/accounting", nil)
++	if err != nil {
++		return nil, err
++	}
++	var id AccountingIdentity
++	if json.Unmarshal(raw, &id) != nil || id.Version != 1 || !accounting.ValidJournalID(id.JournalID) {
++		return nil, accountingError()
++	}
++	return json.Marshal(id)
++}
++func (c *Client) validateBinding(b *CallBinding, callID, journalID string, fresh bool) error {
++	if b == nil || b.Version != 1 || b.CallID != callID || b.JournalID != journalID || !accounting.ValidCallID(b.CallID) || !accounting.ValidJournalID(b.JournalID) || !digestPattern.MatchString(b.SessionID) {
++		return accountingError()
++	}
++	cap, capOK := positiveDecimal(b.CapUnits, 128)
++	_, limitOK := positiveDecimal(b.RequestLimitMicroUSD, 64)
++	q := b.BillingQuote
++	_, manifest, err := pinnedDeployment(c.config.Network)
++	if err != nil {
++		return err
++	}
++	var pinned struct {
++		ChainID    uint64 `json:"chain_id"`
++		Feed       string `json:"native_price_feed_address"`
++		MaxAge     uint64 `json:"native_price_max_age_seconds"`
++		MinimumCap uint64 `json:"request_charge_cap"`
++	}
++	if json.Unmarshal(manifest, &pinned) != nil {
++		return accountingError()
++	}
++	_, roundOK := positiveDecimal(q.RoundID, 80)
++	answer, answerOK := positiveDecimal(q.Answer, 128)
++	now := uint64(c.now().Unix())
++	if !capOK || cap.Sign() == 0 || !limitOK || !roundOK || !answerOK || answer.Cmp(big.NewInt(1_000_000_000_000_000_000)) > 0 || q.Asset != "native_eth" || q.UnitsPerETH != 1_000_000_000 || q.ChainID != pinned.ChainID || q.FeedAddress != strings.ToLower(pinned.Feed) || q.Decimals != 8 || pinned.MaxAge == 0 || pinned.MaxAge > 86400 || q.UpdatedAt == 0 || q.UpdatedAt > now || q.ExpiresAt <= q.UpdatedAt || q.ExpiresAt-q.UpdatedAt != pinned.MaxAge || (fresh && q.ExpiresAt <= now) {
++		return accountingError()
++	}
++	limit, _ := new(big.Int).SetString(b.RequestLimitMicroUSD, 10)
++	numerator := new(big.Int).Mul(limit, big.NewInt(100_000_000_000_000_000))
++	denominator := new(big.Int).Mul(answer, big.NewInt(1_000_000))
++	numerator.Add(numerator, new(big.Int).Sub(denominator, big.NewInt(1)))
++	expected := numerator.Quo(numerator, denominator)
++	minimum := new(big.Int).SetUint64(pinned.MinimumCap)
++	if expected.Cmp(minimum) < 0 {
++		expected = minimum
++	}
++	if pinned.MinimumCap == 0 || cap.Cmp(expected) != 0 {
++		return accountingError()
++	}
++	return nil
++}
++func bindingValuation(b *CallBinding) *big.Int {
++	units, _ := new(big.Int).SetString(b.CapUnits, 10)
++	answer, _ := new(big.Int).SetString(b.BillingQuote.Answer, 10)
++	numerator := new(big.Int).Mul(units, answer)
++	numerator.Mul(numerator, big.NewInt(1_000_000))
++	denominator := big.NewInt(100_000_000_000_000_000)
++	numerator.Add(numerator, new(big.Int).Sub(denominator, big.NewInt(1)))
++	return numerator.Quo(numerator, denominator)
++}
++func (c *Client) CallSettlement(ctx context.Context, callID string) (json.RawMessage, error) {
++	if !accounting.ValidCallID(callID) {
++		return nil, accountingError()
++	}
++	identity, err := c.Accounting(ctx)
++	if err != nil {
++		return nil, err
++	}
++	var id AccountingIdentity
++	_ = json.Unmarshal(identity, &id)
++	raw, err := c.request(ctx, http.MethodGet, "/oa/v1/call-settlements/"+callID, nil)
++	if err != nil {
++		return nil, err
++	}
++	var result CallSettlement
++	if json.Unmarshal(raw, &result) != nil || result.Version != 1 || result.CallID != callID || result.JournalID != id.JournalID {
++		return nil, accountingError()
++	}
++	switch result.Status {
++	case "reserved":
++		if result.Binding != nil || result.Receipt != nil {
++			return nil, accountingError()
++		}
++	case "bound", "settled":
++		if err := c.validateBinding(result.Binding, callID, id.JournalID, false); err != nil {
++			return nil, err
++		}
++		if result.Status == "bound" {
++			if result.Receipt != nil {
++				return nil, accountingError()
++			}
++			break
++		}
++		r := result.Receipt
++		if r == nil || !strings.HasPrefix(r.ReceiptID, "0x") || !digestPattern.MatchString(strings.TrimPrefix(r.ReceiptID, "0x")) {
++			return nil, accountingError()
++		}
++		charge, ok := decimalUnits(r.ChargeUnits)
++		_, balanceOK := decimalUnits(r.BalanceUnits)
++		cap, _ := positiveDecimal(result.Binding.CapUnits, 128)
++		if !ok || !balanceOK || charge.Cmp(cap) > 0 {
++			return nil, accountingError()
++		}
++	default:
++		return nil, accountingError()
++	}
++	return json.Marshal(result)
++}
++func (c *Client) trackedLease(ctx context.Context, body json.RawMessage, admission accounting.Admission) (providerLease, error) {
++	if !admission.Valid() {
++		return providerLease{}, accountingError()
++	}
++	identity, err := c.Accounting(ctx)
++	if err != nil {
++		return providerLease{}, err
++	}
++	var id AccountingIdentity
++	_ = json.Unmarshal(identity, &id)
++	if id.JournalID != admission.JournalID {
++		return providerLease{}, accountingError()
++	}
++	limit, err := c.requestBudget(ctx, body)
++	if err != nil {
++		return providerLease{}, err
++	}
++	if limit > admission.ReservedMicroUSD {
++		return providerLease{}, accountingError()
++	}
++	// A tracked call owns one lease and cannot reuse an old provider credential.
++	c.cachedLease = nil
++	if c.leaseGroup != nil && !c.leaseGroup.attempted {
++		if err := c.settleGroup(ctx); err != nil {
++			return providerLease{}, err
++		}
++	}
++	request, _ := json.Marshal(map[string]any{"request_limit_micro_usd": limit, "call_id": admission.CallID})
++	raw, err := c.request(ctx, http.MethodPost, "/oa/v1/lease", request)
++	// Issuance is one-shot. Even an explicit pending reply may have durably
++	// reserved this ID; only receipt lookup can resolve it, never a lease retry.
++	if err != nil {
++		return providerLease{}, err
++	}
++	lease, err := c.acceptLease(raw, limit)
++	if err != nil {
++		return providerLease{}, err
++	}
++	c.cachedLease = nil
++	c.leaseGroup.until = c.now()
++	if err := c.validateBinding(lease.Accounting, admission.CallID, admission.JournalID, true); err != nil {
++		return providerLease{}, err
++	}
++	if lease.Accounting.RequestLimitMicroUSD != strconv.FormatUint(limit, 10) || bindingValuation(lease.Accounting).Cmp(new(big.Int).SetUint64(admission.ReservedMicroUSD)) > 0 {
++		return providerLease{}, accountingError()
++	}
++	return lease, nil
++}
+diff --git a/zkapi-clientd/internal/zkapi/call_accounting_test.go b/zkapi-clientd/internal/zkapi/call_accounting_test.go
+new file mode 100644
+index 0000000..2ae29c1
+--- /dev/null
++++ b/zkapi-clientd/internal/zkapi/call_accounting_test.go
+@@ -0,0 +1,171 @@
++package zkapi
++
++import (
++	"context"
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
++)
++
++const trackedCall = "a0000000-0000-4000-8000-000000000001"
++const trackedJournal = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
++
++func testBinding() *CallBinding {
++	now := uint64(time.Now().Unix())
++	return &CallBinding{Version: 1, JournalID: trackedJournal, CallID: trackedCall, SessionID: strings.Repeat("b", 64), RequestLimitMicroUSD: "1000000", CapUnits: "333334", BillingQuote: NativeUSDQuote{Asset: "native_eth", UnitsPerETH: 1_000_000_000, ChainID: 1, FeedAddress: "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419", RoundID: "123", Answer: "300000000000", Decimals: 8, UpdatedAt: now - 100, ExpiresAt: now + 4400}}
++}
++func trackedContext(reserved uint64) context.Context {
++	return accounting.WithAdmission(context.Background(), accounting.Admission{CallID: trackedCall, JournalID: trackedJournal, ReservedMicroUSD: reserved})
++}
++func TestTrackedLeaseReservesOneSessionAndNeverLeaksAdmissionToProvider(t *testing.T) {
++	var calls, leases, settlements int
++	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		calls++
++		for name := range r.Header {
++			if strings.Contains(strings.ToLower(name), "veyl") {
++				t.Error("admission header leaked")
++			}
++		}
++		_, _ = io.WriteString(w, `{"choices":[]}`)
++	}))
++	defer upstream.Close()
++	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++		switch r.URL.Path {
++		case "/oa/v1/accounting":
++			_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
++		case "/oa/v1/lease":
++			leases++
++			var request map[string]any
++			_ = json.NewDecoder(r.Body).Decode(&request)
++			if len(request) != 2 || request["call_id"] != trackedCall || request["request_limit_micro_usd"] != float64(1000000) {
++				t.Error("wrong wallet admission")
++			}
++			if leases > 1 {
++				w.WriteHeader(409)
++				_, _ = io.WriteString(w, `{"code":"call_id_reused"}`)
++				return
++			}
++			_ = json.NewEncoder(w).Encode(map[string]any{"api_key": "tracked-private-key", "base_url": upstream.URL, "expires_at": time.Now().Unix() + 60, "verified": true, "verification_status": "verified", "accounting": testBinding()})
++		case "/wallet/settle":
++			settlements++
++			_, _ = io.WriteString(w, `{"pending_request":false}`)
++		default:
++			t.Errorf("unexpected path %s", r.URL.Path)
++		}
++	}, upstream)
++	client.config.KeyReuseWindow = 5 * time.Minute
++	response, err := client.Complete(trackedContext(1001000), json.RawMessage(`{"model":"example/model"}`))
++	if err != nil {
++		t.Fatal(err)
++	}
++	_, _ = io.Copy(io.Discard, response.Body)
++	_ = response.Body.Close()
++	if client.cachedLease != nil || client.leaseGroup.until.After(client.now()) {
++		t.Fatal("tracked key retained")
++	}
++	if _, err = client.Complete(trackedContext(1001000), json.RawMessage(`{"model":"example/model"}`)); err == nil {
++		t.Fatal("reissued call accepted")
++	}
++	if calls != 1 || leases != 2 || settlements != 1 {
++		t.Fatalf("calls %d leases %d settlements %d", calls, leases, settlements)
++	}
++}
++func TestTrackedLeaseRejectsEveryBindingMismatchBeforeInference(t *testing.T) {
++	mutations := map[string]func(*CallBinding){"call": func(b *CallBinding) { b.CallID = "a0000000-0000-4000-8000-000000000002" }, "journal": func(b *CallBinding) { b.JournalID = strings.Repeat("c", 32) }, "session": func(b *CallBinding) { b.SessionID = "bad" }, "model cap": func(b *CallBinding) { b.RequestLimitMicroUSD = "2000000" }, "cap exceeds reservation": func(b *CallBinding) { b.CapUnits = "1000000" }, "feed": func(b *CallBinding) { b.BillingQuote.FeedAddress = "0x" + strings.Repeat("f", 40) }, "chain": func(b *CallBinding) { b.BillingQuote.ChainID = 11155111 }, "expired": func(b *CallBinding) { b.BillingQuote.UpdatedAt = 1; b.BillingQuote.ExpiresAt = 4501 }}
++	for name, mutate := range mutations {
++		t.Run(name, func(t *testing.T) {
++			calls := 0
++			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
++			defer upstream.Close()
++			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/oa/v1/accounting" {
++					_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
++					return
++				}
++				b := testBinding()
++				mutate(b)
++				_ = json.NewEncoder(w).Encode(map[string]any{"api_key": "one-use", "base_url": upstream.URL, "expires_at": time.Now().Unix() + 60, "verified": true, "verification_status": "verified", "accounting": b})
++			}, upstream)
++			if _, err := client.Complete(trackedContext(1001000), json.RawMessage(`{"model":"example/model"}`)); err == nil {
++				t.Fatal("unsafe accounting accepted")
++			}
++			if calls != 0 {
++				t.Fatal("provider called")
++			}
++		})
++	}
++}
++func TestTrackedPendingLeaseIsNeverRetried(t *testing.T) {
++	leases := 0
++	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("provider called") }))
++	defer upstream.Close()
++	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++		if r.URL.Path == "/oa/v1/accounting" {
++			_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
++			return
++		}
++		leases++
++		w.WriteHeader(409)
++		_, _ = io.WriteString(w, `{"code":"pending_settlement"}`)
++	}, upstream)
++	_, err := client.Complete(trackedContext(1001000), json.RawMessage(`{"model":"example/model"}`))
++	if err == nil || leases != 1 {
++		t.Fatalf("pending reissued: leases%d err%v", leases, err)
++	}
++}
++func TestSettlementSanitizesAndValidatesReceiptWithoutProviderDispatch(t *testing.T) {
++	for _, kind := range []string{"settled", "bound", "reserved", "bad charge", "bad identity", "bad receipt", "zero"} {
++		t.Run(kind, func(t *testing.T) {
++			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("provider called") }))
++			defer upstream.Close()
++			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/oa/v1/accounting" {
++					_ = json.NewEncoder(w).Encode(AccountingIdentity{1, trackedJournal})
++					return
++				}
++				report := CallSettlement{Version: 1, JournalID: trackedJournal, CallID: trackedCall, Status: "settled", Binding: testBinding(), Receipt: &CallReceipt{"0x" + strings.Repeat("c", 64), "10000", "1000000"}}
++				switch kind {
++				case "bound":
++					report.Status = "bound"
++					report.Receipt = nil
++				case "reserved":
++					report.Status = "reserved"
++					report.Binding = nil
++					report.Receipt = nil
++				case "bad charge":
++					report.Receipt.ChargeUnits = "333335"
++				case "bad identity":
++					report.JournalID = strings.Repeat("e", 32)
++				case "bad receipt":
++					report.Receipt.ReceiptID = "fake"
++				case "zero":
++					report.Receipt.ChargeUnits = "0"
++				}
++				raw, _ := json.Marshal(report)
++				var object map[string]any
++				_ = json.Unmarshal(raw, &object)
++				object["api_key"] = "never-return-this"
++				_ = json.NewEncoder(w).Encode(object)
++			}, upstream)
++			raw, err := client.CallSettlement(context.Background(), trackedCall)
++			if strings.HasPrefix(kind, "bad") {
++				if err == nil {
++					t.Fatal("invalid receipt accepted")
++				}
++				return
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++			if strings.Contains(string(raw), "api_key") || strings.Contains(string(raw), "never-return") {
++				t.Fatal("secret forwarded")
++			}
++		})
++	}
++}
+diff --git a/zkapi-clientd/internal/zkapi/client.go b/zkapi-clientd/internal/zkapi/client.go
+index b386f1c..c2d5655 100644
+--- a/zkapi-clientd/internal/zkapi/client.go
++++ b/zkapi-clientd/internal/zkapi/client.go
+@@ -18,6 +18,7 @@ import (
+ 	"sync"
+ 	"time"
+ 
++	"github.com/ethereum/zkapi/zkapi-clientd/internal/accounting"
+ 	"github.com/ethereum/zkapi/zkapi-clientd/internal/activity"
+ )
+ 
+@@ -62,6 +63,8 @@ type Error struct {
+ 	Code   string
+ }
+ 
++func (e *Error) HTTPStatus() int { return e.Status }
++
+ func (e *Error) Error() string {
+ 	if e.Code == "testnet_password_required" {
+ 		return "Sepolia password is missing or incorrect; stop the daemon and run zkapi-clientd config to enter the current shared password"
+@@ -322,13 +325,14 @@ func (c *Client) Complete(ctx context.Context, body json.RawMessage) (*http.Resp
+ }
+ 
+ type providerLease struct {
+-	APIKey             string `json:"api_key"`
+-	BaseURL            string `json:"base_url"`
+-	ExpiresAt          uint64 `json:"expires_at"`
+-	Verified           bool   `json:"verified"`
+-	VerificationStatus string `json:"verification_status"`
+-	VerificationDetail string `json:"verification_detail"`
+-	serial             uint64 // local display reference, never decoded from the companion
++	Accounting         *CallBinding `json:"accounting,omitempty"`
++	APIKey             string       `json:"api_key"`
++	BaseURL            string       `json:"base_url"`
++	ExpiresAt          uint64       `json:"expires_at"`
++	Verified           bool         `json:"verified"`
++	VerificationStatus string       `json:"verification_status"`
++	VerificationDetail string       `json:"verification_detail"`
++	serial             uint64       // local display reference, never decoded from the companion
+ }
+ 
+ type reusableLease struct {
+@@ -338,6 +342,9 @@ type reusableLease struct {
+ }
+ 
+ func (c *Client) waitForLease(ctx context.Context, body json.RawMessage) (providerLease, error) {
++	if admission, tracked := accounting.FromContext(ctx); tracked {
++		return c.trackedLease(ctx, body, admission)
++	}
+ 	waiting, retirementAttempted := false, false
+ 	for {
+ 		if err := ctx.Err(); err != nil {

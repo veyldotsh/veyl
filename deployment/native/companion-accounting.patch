@@ -11,16 +11,17 @@ index 05ce3d3..c6d8b0d 100644
  mod oa_station_trust;
 diff --git a/crates/zkapi-clientd/src/oa_accounting.rs b/crates/zkapi-clientd/src/oa_accounting.rs
 new file mode 100644
-index 0000000..7156027
+index 0000000..0952262
 --- /dev/null
 +++ b/crates/zkapi-clientd/src/oa_accounting.rs
-@@ -0,0 +1,582 @@
+@@ -0,0 +1,757 @@
 +//! Durable application-call bindings. Only the authenticated loopback bridge
 +//! can create/read these records. A repeated call never issues another key.
 +use std::fs::{self, File, OpenOptions};
 +use std::io::{Read, Write};
 +use std::path::{Path, PathBuf};
 +
++use fs2::FileExt;
 +use serde::{Deserialize, Serialize};
 +use serde_json::{json, Value};
 +use sha2::{Digest, Sha256};
@@ -220,6 +221,8 @@ index 0000000..7156027
 +}
 +
 +pub(crate) fn reserve(config: &AuthConfig, id: &str, limit: u64) -> Result<(), AuthError> {
++    let _lock = lock(config)?;
++    resume_binding(config)?;
 +    call_id(id)?;
 +    let saved = identity(config)?;
 +    let calls = directory(config).join("calls");
@@ -250,6 +253,16 @@ index 0000000..7156027
 +    let Some(record): Option<CallRecord> = read(&call_path(config, id)?)? else {
 +        return Ok(None);
 +    };
++    validate_record(config, id, &record, &saved)?;
++    Ok(Some(record))
++}
++
++fn validate_record(
++    config: &AuthConfig,
++    id: &str,
++    record: &CallRecord,
++    saved: &Identity,
++) -> Result<(), AuthError> {
 +    if record.version != 1
 +        || record.journal_id != saved.journal_id
 +        || record.call_id != id
@@ -279,7 +292,111 @@ index 0000000..7156027
 +        }
 +        _ => return Err(invalid()),
 +    }
-+    Ok(Some(record))
++    Ok(())
++}
++
++fn lock(config: &AuthConfig) -> Result<File, AuthError> {
++    identity(config)?;
++    let mut options = OpenOptions::new();
++    options.create(true).read(true).write(true);
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::OpenOptionsExt;
++        options.mode(0o600);
++    }
++    let file = options
++        .open(directory(config).join("binding.lock"))
++        .map_err(|_| invalid())?;
++    file.lock_exclusive().map_err(|_| invalid())?;
++    Ok(file)
++}
++
++fn owner_path(config: &AuthConfig, native: &str) -> PathBuf {
++    directory(config)
++        .join("owners")
++        .join(format!("{:x}.json", Sha256::digest(native.as_bytes())))
++}
++
++// A write-ahead commit links both indexes before remote submission. Recovery
++// rolls it forward under a process-shared lock; no request ID can belong to two
++// application calls, even if a process dies between the two durable writes.
++fn resume_binding(config: &AuthConfig) -> Result<(), AuthError> {
++    let path = directory(config).join("binding-commit.json");
++    let Some(saved): Option<CallRecord> = read(&path)? else {
++        return Ok(());
++    };
++    let identity = identity(config)?;
++    call_id(&saved.call_id)?;
++    validate_record(config, &saved.call_id, &saved, &identity)?;
++    let native = saved.native_request_id.as_deref().ok_or_else(invalid)?;
++    if saved.binding.is_none() {
++        return Err(invalid());
++    }
++    let owner = owner_path(config, native);
++    if let Some(previous) = read::<CallRecord>(&owner)? {
++        if serde_json::to_vec(&previous).map_err(|_| invalid())?
++            != serde_json::to_vec(&saved).map_err(|_| invalid())?
++        {
++            return Err(invalid());
++        }
++    } else {
++        write(&owner, &saved, true)?;
++    }
++    checkpoint("owner-saved")?;
++    let previous = record(config, &saved.call_id)?.ok_or_else(invalid)?;
++    if previous.request_limit_micro_usd != saved.request_limit_micro_usd {
++        return Err(invalid());
++    }
++    if previous.binding.is_some()
++        && serde_json::to_vec(&previous).map_err(|_| invalid())?
++            != serde_json::to_vec(&saved).map_err(|_| invalid())?
++    {
++        return Err(invalid());
++    }
++    write(&call_path(config, &saved.call_id)?, &saved, false)?;
++    checkpoint("call-saved")?;
++    fs::remove_file(&path).map_err(|_| invalid())?;
++    sync(&directory(config))?;
++    checkpoint("binding-cleared")
++}
++
++pub(crate) fn binding_for_request(
++    config: &AuthConfig,
++    id: &str,
++    native: &str,
++) -> Result<Binding, AuthError> {
++    let _lock = lock(config)?;
++    resume_binding(config)?;
++    let saved = record(config, id)?.ok_or_else(invalid)?;
++    if saved.native_request_id.as_deref() != Some(native) {
++        return Err(conflict());
++    }
++    let owner: CallRecord = read(&owner_path(config, native))?.ok_or_else(invalid)?;
++    if serde_json::to_vec(&saved).map_err(|_| invalid())?
++        != serde_json::to_vec(&owner).map_err(|_| invalid())?
++    {
++        return Err(invalid());
++    }
++    saved.binding.ok_or_else(invalid)
++}
++
++pub(crate) fn require_unbound_request(config: &AuthConfig, native: &str) -> Result<(), AuthError> {
++    let _lock = lock(config)?;
++    resume_binding(config)?;
++    if read::<CallRecord>(&owner_path(config, native))?.is_some() {
++        return Err(conflict());
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++thread_local! { static FAIL_AFTER: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) }; }
++fn checkpoint(_stage: &str) -> Result<(), AuthError> {
++    #[cfg(test)]
++    if FAIL_AFTER.with(|value| value.get() == Some(_stage)) {
++        return Err(invalid());
++    }
++    Ok(())
 +}
 +
 +pub(crate) fn bind(
@@ -288,12 +405,17 @@ index 0000000..7156027
 +    native_id: &str,
 +    request: &ApiRequestV2,
 +) -> Result<Binding, AuthError> {
++    let _lock = lock(config)?;
++    resume_binding(config)?;
 +    let mut saved = record(config, id)?.ok_or_else(invalid)?;
 +    if saved.binding.is_some() || saved.native_request_id.is_some() {
 +        return Err(conflict());
 +    }
 +    if request.client_request_id != native_id {
 +        return Err(invalid());
++    }
++    if read::<CallRecord>(&owner_path(config, native_id))?.is_some() {
++        return Err(conflict());
 +    }
 +    let quote = oa_native::saved_quote(config, &request.payload)?.ok_or_else(invalid)?;
 +    let expected = quote
@@ -313,7 +435,13 @@ index 0000000..7156027
 +    };
 +    saved.native_request_id = Some(native_id.to_owned());
 +    saved.binding = Some(binding.clone());
-+    write(&call_path(config, id)?, &saved, false)?;
++    write(
++        &directory(config).join("binding-commit.json"),
++        &saved,
++        false,
++    )?;
++    checkpoint("binding-staged")?;
++    resume_binding(config)?;
 +    Ok(binding)
 +}
 +
@@ -346,6 +474,8 @@ index 0000000..7156027
 +    id: &str,
 +    wallet: &Wallet,
 +) -> Result<Option<Value>, AuthError> {
++    let _lock = lock(config)?;
++    resume_binding(config)?;
 +    let Some(saved) = record(config, id)? else {
 +        return Ok(None);
 +    };
@@ -577,6 +707,51 @@ index 0000000..7156027
 +    }
 +
 +    #[test]
++    fn call_accounting_preissuance_crashes_restore_binding_and_never_reassign_native_request() {
++        for stage in [
++            "binding-staged",
++            "owner-saved",
++            "call-saved",
++            "binding-cleared",
++        ] {
++            let directory = tempfile::tempdir().unwrap();
++            let (config, mut wallet, request, response) = fixture(directory.path());
++            let id = uuid::Uuid::new_v4().to_string();
++            reserve(&config, &id, 1_000_000).unwrap();
++            FAIL_AFTER.with(|fail| fail.set(Some(stage)));
++            assert!(
++                bind(&config, &id, &request.client_request_id, &request).is_err(),
++                "{stage}"
++            );
++            FAIL_AFTER.with(|fail| fail.set(None));
++            // A new process loads only disk state. Recovery finishes both
++            // indexes before exposing the bound call or allowing a new bind.
++            initialize(&config).unwrap();
++            assert_eq!(
++                snapshot(&config, &id, &wallet).unwrap().unwrap()["status"],
++                "bound",
++                "{stage}"
++            );
++            assert!(binding_for_request(&config, &id, &request.client_request_id).is_ok());
++            assert!(require_unbound_request(&config, &request.client_request_id).is_err());
++            let other = uuid::Uuid::new_v4().to_string();
++            reserve(&config, &other, 1_000_000).unwrap();
++            assert!(bind(&config, &other, &request.client_request_id, &request).is_err());
++            assert!(bind(&config, &id, &request.client_request_id, &request).is_err());
++            // A server-accepted request whose reply was lost still resolves
++            // to the original job after its genuine signed response arrives.
++            wallet.complete_pending_response(&response).unwrap();
++            let result = snapshot(&config, &id, &wallet).unwrap().unwrap();
++            assert_eq!(result["status"], "settled");
++            assert_eq!(result["receipt"]["charge_units"], "7");
++            assert_eq!(
++                snapshot(&config, &other, &wallet).unwrap().unwrap()["status"],
++                "reserved"
++            );
++        }
++    }
++
++    #[test]
 +    fn call_accounting_parallel_reservation_has_one_winner_and_never_rebinds() {
 +        let directory = tempfile::tempdir().unwrap();
 +        let (config, wallet, _, _) = fixture(directory.path());
@@ -700,7 +875,7 @@ index 5c69960..14b3c1f 100644
      async fn session_events_are_authenticated_browser_blocked_and_no_store() {
          let directory = tempfile::tempdir().unwrap();
 diff --git a/crates/zkapi-clientd/src/service.rs b/crates/zkapi-clientd/src/service.rs
-index 2334584..51689bb 100644
+index 2334584..65abf9a 100644
 --- a/crates/zkapi-clientd/src/service.rs
 +++ b/crates/zkapi-clientd/src/service.rs
 @@ -637,6 +637,7 @@ impl AuthService {
@@ -753,21 +928,21 @@ index 2334584..51689bb 100644
          if self.config.request_mode != RequestMode::DirectOpenrouter
              || !self.config.require_oa_org_key_source
          {
-@@ -791,19 +813,29 @@ impl AuthService {
+@@ -791,23 +813,36 @@ impl AuthService {
          if !matches!(request_limit_micro_usd, 1_000_000 | 2_000_000 | 3_000_000 | 4_500_000 | 6_000_000) {
              return Err(AuthError::Wallet("unreviewed request budget".into()));
          }
+-        let guard = self.ready_direct_lease(request_limit_micro_usd).await?;
 +        if let Some(id) = call_id.as_deref() {
 +            if self.config.billing_asset != "native_eth" { return Err(AuthError::InvalidInput("call accounting requires the native ETH deployment".into())); }
 +            crate::oa_accounting::reserve(&self.config, id, request_limit_micro_usd as u64)?;
 +        }
-         let guard = self.ready_direct_lease(request_limit_micro_usd).await?;
++        let guard = self.ready_direct_lease_for_call(request_limit_micro_usd, call_id.as_deref()).await?;
          let lease = guard.as_ref().ok_or_else(|| AuthError::Wallet("lease disappeared".into()))?;
          self.check_cached_lease_station(lease)?;
          reserve_oa_bridge_lease(&self.config.state_dir, &lease.client_request_id)?;
 +        let accounting = if let Some(id) = call_id.as_deref() {
-+            let request = self.prepare_direct_lease_request(None).await?;
-+            Some(crate::oa_accounting::bind(&self.config, id, &lease.client_request_id, &request)?)
++            Some(crate::oa_accounting::binding_for_request(&self.config, id, &lease.client_request_id)?)
 +        } else { None };
          self.oa_session_events.started(&lease.client_request_id);
 -        Ok(serde_json::json!({
@@ -785,3 +960,138 @@ index 2334584..51689bb 100644
      }
  
  
+     async fn ready_direct_lease(&self, request_limit_micro_usd: u128) -> Result<tokio::sync::MutexGuard<'_, Option<ActiveOpenRouterLease>>, AuthError> {
++        self.ready_direct_lease_for_call(request_limit_micro_usd, None).await
++    }
++
++    async fn ready_direct_lease_for_call(&self, request_limit_micro_usd: u128, call_id: Option<&str>) -> Result<tokio::sync::MutexGuard<'_, Option<ActiveOpenRouterLease>>, AuthError> {
+         use sha3::{Digest, Keccak256};
+         self.ensure_scheme_agreement().await?;
+         let mut slot = self.direct_lease.lock().await;
+@@ -823,7 +858,7 @@ impl AuthService {
+                 *slot = None;
+             }
+         }
+-        self.ensure_direct_openrouter_lease(&mut slot, "oa-single-use", Some(request_limit_micro_usd)).await?;
++        self.ensure_direct_openrouter_lease(&mut slot, "oa-single-use", Some(request_limit_micro_usd), call_id).await?;
+         let request = self.prepare_direct_lease_request(None).await?;
+         self.check_request_budget(&request, request_limit_micro_usd)?;
+         let lease = slot.as_mut().ok_or_else(|| AuthError::Wallet("lease disappeared".into()))?;
+@@ -1446,12 +1481,17 @@ impl AuthService {
+         lease_slot: &mut Option<ActiveOpenRouterLease>,
+         session_id: &str,
+         request_limit_micro_usd: Option<u128>,
++        call_id: Option<&str>,
+     ) -> Result<(), AuthError> {
+         if lease_slot
+             .as_ref()
+             .is_some_and(|lease| now_seconds().saturating_add(1) < lease.expires_at)
+         {
+             let lease = lease_slot.as_ref().expect("checked above");
++            // An existing one-show key cannot be attributed to a new call.
++            // Legacy paths must not adopt a tracked call's pending lease either.
++            if call_id.is_some() { return Err(AuthError::LeasePending("previous lease must settle before another tracked call".into())); }
++            crate::oa_accounting::require_unbound_request(&self.config, &lease.client_request_id)?;
+             if lease.session_id != session_id {
+                 return Err(AuthError::LeaseSessionConflict {
+                     active_session_id: lease.session_id.clone(),
+@@ -1478,7 +1518,7 @@ impl AuthService {
+         // explicit settlement, credit exhaustion, or a key rejection.
+         let _ = self.recover().await?;
+         *lease_slot = Some(
+-            self.issue_direct_openrouter_lease(session_id.to_string(), request_limit_micro_usd)
++            self.issue_direct_openrouter_lease(session_id.to_string(), request_limit_micro_usd, call_id)
+                 .await?,
+         );
+         Ok(())
+@@ -1552,7 +1592,7 @@ impl AuthService {
+         loop {
+             let request_guard = self.direct_request_mutex.clone().read_owned().await;
+             let mut lease_slot = self.direct_lease.lock().await;
+-            self.ensure_direct_openrouter_lease(&mut lease_slot, session_id, None)
++            self.ensure_direct_openrouter_lease(&mut lease_slot, session_id, None, None)
+                 .await?;
+             let lease = lease_slot
+                 .as_mut()
+@@ -1759,6 +1799,7 @@ impl AuthService {
+         &self,
+         session_id: String,
+         request_limit_micro_usd: Option<u128>,
++        call_id: Option<&str>,
+     ) -> Result<ActiveOpenRouterLease, AuthError> {
+         let mut retried_stale_root = false;
+         let mut reconciled_lost_key = false;
+@@ -1768,6 +1809,14 @@ impl AuthService {
+             if let Some(limit) = request_limit_micro_usd {
+                 self.check_request_budget(&request, limit)?;
+             }
++            // Both the original wallet journal and the app/native binding are
++            // fsynced before a server can accept this authorization. A lost
++            // reply can therefore only leave a recoverable, attributable call.
++            if let Some(id) = call_id {
++                crate::oa_accounting::bind(&self.config, id, &request.client_request_id, &request)?;
++            } else {
++                crate::oa_accounting::require_unbound_request(&self.config, &request.client_request_id)?;
++            }
+             let response = zkapi_client::testnet_auth::request(self.config.chain_id, &self.config.protocol_server_url, reqwest::Method::POST, format!(
+                     "{}/v2/openrouter/leases",
+                     self.config.protocol_server_url.trim_end_matches('/')
+@@ -1853,6 +1902,11 @@ impl AuthService {
+                 });
+             }
+             if let Ok(error) = serde_json::from_str::<ErrorResponse>(&body) {
++                // No new authorization or native ID may replace a bound call.
++                // Recovery remains conservative even for stale/expired errors.
++                if call_id.is_some() {
++                    return Err(AuthError::LeasePending(format!("tracked lease issuance returned {}; read its settlement before any further dispatch", error.error_code)));
++                }
+                 if !refreshed_native_quote && self.config.billing_asset == "native_eth"
+                     && matches!(error.error_code.as_str(), "native_quote_expired" | "native_quote_superseded") {
+                     self.refresh_unaccepted_native_request(request.clone()).await?;
+@@ -4146,6 +4200,46 @@ mod oa_native_recovery_tests {
+         }
+     }
+ 
++    #[tokio::test]
++    async fn call_accounting_is_durable_before_http_and_never_retries_or_reassigns_a_bound_call() {
++        use axum::{extract::State, routing::post, Json, Router};
++        use std::sync::atomic::{AtomicUsize, Ordering};
++        for error_code in ["native_quote_expired", "native_quote_superseded", "stale_root", "lease_pending", "lost_reply"] {
++            let (_directory, mut config, request) = fixture();
++            let call = uuid::Uuid::new_v4().to_string();
++            let hits = Arc::new(AtomicUsize::new(0));
++            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++            config.protocol_server_url = format!("http://{}", listener.local_addr().unwrap());
++            let state = (config.clone(), call.clone(), hits.clone(), error_code.to_string());
++            let router = Router::new().route("/v2/openrouter/leases", post(|State((config, call, hits, code)): State<(AuthConfig, String, Arc<AtomicUsize>, String)>, Json(request): Json<ApiRequestV2>| async move {
++                hits.fetch_add(1, Ordering::SeqCst);
++                // This handler represents the external server admission
++                // boundary. Disk already identifies its one application call.
++                crate::oa_accounting::binding_for_request(&config, &call, &request.client_request_id).unwrap();
++                let status = if code == "lost_reply" { axum::http::StatusCode::OK } else { axum::http::StatusCode::CONFLICT };
++                (status, Json(json!({"error_code":code,"error_message":"offline failure fixture"})))
++            })).with_state(state);
++            let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
++            let service = AuthService::new(config.clone()).unwrap();
++            crate::oa_accounting::reserve(&config, &call, 1_000_000).unwrap();
++            assert!(service.issue_direct_openrouter_lease("oa-single-use".into(), Some(1_000_000), Some(&call)).await.is_err());
++            assert_eq!(hits.load(Ordering::SeqCst), 1, "{error_code}");
++            assert_eq!(service.oa_call_settlement(call.clone()).await.unwrap().unwrap()["status"], "bound");
++            let saved = PendingRequestJournal::read(&config.state_dir.join("pending_journal.json")).unwrap().unwrap();
++            assert_eq!(saved.client_request_id, request.client_request_id);
++            drop(service);
++            let restarted = AuthService::new(config.clone()).unwrap();
++            let other = uuid::Uuid::new_v4().to_string();
++            crate::oa_accounting::reserve(&config, &other, 1_000_000).unwrap();
++            // Neither another tracked call nor the old legacy route can use
++            // this pending authorization. They fail before another HTTP send.
++            assert!(restarted.issue_direct_openrouter_lease("oa-single-use".into(), Some(1_000_000), Some(&other)).await.is_err());
++            assert!(restarted.issue_direct_openrouter_lease("oa-single-use".into(), Some(1_000_000), None).await.is_err());
++            assert_eq!(hits.load(Ordering::SeqCst), 1, "{error_code}");
++            server.abort();
++        }
++    }
++
+     #[tokio::test]
+     async fn restart_replays_expired_frozen_quote_and_bound_without_new_oracle() {
+         let (_directory,config,request)=fixture();let service=AuthService::new(config).unwrap();

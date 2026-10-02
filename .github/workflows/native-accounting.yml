@@ -24,11 +24,44 @@ jobs:
           node-version: '22.22.0'
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install 1.91.1 --profile minimal
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ${{ runner.temp }}/veyl-native-target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: veyl-native-arm64-rust1911-${{ hashFiles('deployment/native/source-lock.json') }}
+          restore-keys: veyl-native-arm64-rust1911-
       - name: Verify, test and build the patched native wallet
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/veyl-native-target
         run: node scripts/build-native-accounting.mjs "$RUNNER_TEMP/veyl-native"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: veyl-wallet-linux-arm64
           path: ${{ runner.temp }}/veyl-native/artifacts/
+          retention-days: 7
+          if-no-files-found: error
+
+  daemon:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '22.22.0'
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - name: Verify, test and build the patched inference daemon
+        run: node scripts/build-native-accounting.mjs "$RUNNER_TEMP/veyl-go" go
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: veyl-daemon-linux-arm64
+          path: ${{ runner.temp }}/veyl-go/artifacts/
           retention-days: 7
           if-no-files-found: error
