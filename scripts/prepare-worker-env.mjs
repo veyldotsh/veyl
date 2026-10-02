@@ -22,7 +22,12 @@ export function validateWorkerEnvironment(raw, env = process.env) {
     const match = /^([A-Z][A-Z0-9_]*)=([^\r\n]*)$/.exec(line); if (!match || Object.hasOwn(data, match[1])) throw new Error('Invalid or duplicate worker environment field.'); data[match[1]] = match[2];
   }
   if (Object.keys(data).length !== Object.keys(expected).length + secrets.length) throw new Error('Existing worker environment has unexpected fields; review it without printing secrets.');
-  for (const [name, value] of Object.entries(expected)) if (data[name] !== value) throw new Error('Existing worker environment differs from the approved isolated preset.');
+  for (const [name, value] of Object.entries(expected)) {
+    // An existing installation may explicitly enable wallet-approved mainnet
+    // actions. Generation stays disabled; autonomous spending flags stay strict.
+    const valid = name === 'VEYL_ENABLE_MAINNET_TRANSACTIONS' ? ['true', 'false'].includes(data[name]) : data[name] === value;
+    if (!valid) throw new Error('Existing worker environment differs from the approved isolated preset.');
+  }
   if (secrets.some(name => !/^[0-9a-f]{64}$/.test(data[name])) || new Set(secrets.map(name => data[name])).size !== secrets.length) throw new Error('Worker secret format or independence is invalid.');
   return true;
 }

@@ -1,9 +1,9 @@
 {
   "version": 1,
   "chainId": 1,
-  "generatedAt": "2026-10-02T02:13:18.882Z",
-  "calculationOnly": true,
-  "transactionSent": false,
+  "generatedAt": "2026-10-02T03:03:44.904Z",
+  "calculationOnly": false,
+  "transactionSent": true,
   "deployer": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
   "creator": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
   "protocolRecipient": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
@@ -16,35 +16,75 @@
       "nonce": "0",
       "address": "0x8a470CF07638E659211dd116b1ab3aA757a40376",
       "method": "CREATE",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0x37c1eb9a0225b1eee9301588927cd8abdc6beaa17b0d6d508a5f98f2e68d01aa",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xedb508baed917481349066f06a622dc4472001f86192c25f43de1b27101f4c68",
+        "blockNumber": "26101815",
+        "blockHash": "0xa5c9487906f89c62da873ff31bf51ef1f440ab39a5e1ad828ed965c24e7636eb",
+        "confirmations": 13
+      }
     },
     {
       "contract": "VeylProjectBuilder",
       "nonce": "1",
       "address": "0x3F352196444d913146111f31bF6423B041bbDF31",
       "method": "CREATE",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0xe175e59cdd95e1705c4980c14c1f18b45c39eb8415af5642a975fd40fec31a41",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xe3fc28c30f18ebf278d6052573c3711512bc2d7d27a88fa2e0e703d827867ef7",
+        "blockNumber": "26101817",
+        "blockHash": "0x3267c1423a676c7f5edda82ebc20d5ace1d9f109a56160f5a53bb1795c895573",
+        "confirmations": 11
+      }
     },
     {
       "contract": "VeylMarketBuilder",
       "nonce": "2",
       "address": "0x624E2F6d2C196b14A37d504C8404525B1BeD951c",
       "method": "CREATE",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0xc7e310909392c1edfa92bcca8a3100988d515637a60aecfd9df2dbc1a32cd5d7",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x9e91b160b2207e32ed48e7b1fae885a9f532da8dd2046d7dff22c77443ea2618",
+        "blockNumber": "26101819",
+        "blockHash": "0x4663f15dc2b8615fa0e82e2372d99277ecee7c2de56bb2378c372a611530bbec",
+        "confirmations": 9
+      }
     },
     {
       "contract": "VeylMainLiquidityBuilder",
       "nonce": "3",
       "address": "0x6136c29498De82B2270DD589B6D06a6Cb8f31646",
       "method": "CREATE",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0xb30a5c53c58291d844f4f58b4cb758145df6b80f8677de18831f9f1d801b8855",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xccf14db8af67e749adfaf1c43ecc92c27105d82ec4a41d81c991316aae1b8afe",
+        "blockNumber": "26101821",
+        "blockHash": "0x21b5d055445d769e917414f81f35d3b595a8e158ae6ca0bb2ae2d0429cdbd9e7",
+        "confirmations": 7
+      }
     },
     {
       "contract": "VeylMarketFactory",
       "nonce": "4",
       "address": "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
       "method": "CREATE",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0x6f14260f3d30b978702b58579c4b051c2f34914663a9641e7759ff3515cf48c2",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
     }
   ],
   "factoryChildren": [
@@ -62,7 +102,15 @@
       "initCodeHash": "0x8d4a0c49e3250893fd9fb1688e3599eda92c12f5e60475ed6a1c4ac86ee1f747",
       "address": "0x53bE1c465E69F3c9091a80F42B1AA95518581E98",
       "method": "CREATE2",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0x073e14e3a365ee1bc9cf333e0a382978b63500cb40fe45f9955d190b3b539ca0",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
     },
     {
       "contract": "VeylMarketDeployer",
@@ -76,7 +124,15 @@
       "initCodeHash": "0x1769923990b36ac11ae5c547cbf0530b88daad5eb37e02afdfe8dce13f21c9e7",
       "address": "0x8b0C2aD6cc0F1c515c2BBFA877C9FAAcb581cC61",
       "method": "CREATE2",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0xc676fe86ba827cf1e006951a34e86201854ded54dc7db4a9fe9e02c02102ef87",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
     },
     {
       "contract": "VeylMainLiquidityDeployer",
@@ -92,7 +148,15 @@
       "initCodeHash": "0xe80bdb296a6191611e0cb8ed6bc10b0ba32c6efe5be61dfe91550d6b6be8a32e",
       "address": "0xB1AB4d362713bd79e7Dde7E5a43993F76F9A745e",
       "method": "CREATE2",
-      "deployed": false
+      "deployed": true,
+      "runtimeCodeHash": "0x58d8d4e63a6275ec31d529da17d5bd1c8270496e2f1d64eca4504a4afa8a70e5",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
     }
   ],
   "token": {
@@ -103,12 +167,20 @@
     "from": "0x53bE1c465E69F3c9091a80F42B1AA95518581E98",
     "initCodeHash": "0xcdaaee358a4d3aaad15c25d13499e1fa4ccdcc033e0391865ee982329e210574",
     "address": "0x2eaB833d244352D4A7f8dC93285B1776F01954cB",
-    "deployed": false,
-    "status": "conditional-prediction",
+    "deployed": true,
+    "status": "deployed",
     "dependsOnLiquidityPriceOrBudget": false,
     "launchSalt": "0x672a9aa9fcb689142afad0e644046d02e8713ac0718f81d7f72f22577e81be59",
     "saltLabel": "veyl:ethereum:main-token:v1",
-    "marketId": "0x1a83b2c7e779dfe02bf739bec03961a0b2715796fddf44b75ef2be928692e2cf"
+    "marketId": "0x1a83b2c7e779dfe02bf739bec03961a0b2715796fddf44b75ef2be928692e2cf",
+    "runtimeCodeHash": "0x6c0f99c7021329cfd5a4fc28221c6c231a8a73771534cb98bc87ccc373348101",
+    "receipt": {
+      "chainId": 1,
+      "transactionHash": "0xeaa8fcfdf78089740a34b4296d1c9b7b27a784adad049cc39b862b2f53cf0dcb",
+      "blockNumber": "26101826",
+      "blockHash": "0x4eae8cdd58e1b4eda1ba5e747418134f284a9d6ee27bc77bcc0d290a2b4f9ab9",
+      "confirmations": 2
+    }
   },
   "artifacts": [
     {
@@ -154,21 +226,197 @@
     "0x672a9aa9fcb689142afad0e644046d02e8713ac0718f81d7f72f22577e81be59"
   ],
   "requirements": [
-    "The same public deployer must CREATE the five contracts at the exact listed nonces and in this order, with no intervening transaction.",
-    "The factory must use the listed helpers, PoolManager, protocol recipient, native ETH quote and zero conversion router.",
-    "The main factory must use VeylMainLiquidityBuilder with the canonical PositionManager, listed creator and canonical salt. Its liquidity NFT is minted to the creator and is not locked until custody changes.",
-    "The token creator must be the listed creator and its treasury owner must match configured owner. The main token uses the published canonical launch salt, independent of workspace ID.",
-    "The compiled creation bytecode hashes must remain identical; rebuilding changed source or metadata can change CREATE2 addresses.",
-    "Predicted addresses do not show deployment, available liquidity, ownership or approval to spend."
+    "The recorded six successful Ethereum transactions and 14 runtime hashes match the reviewed deployment.",
+    "The main liquidity NFT was minted to the deployer. Its recorded initial ownership is not a claim that liquidity is currently locked.",
+    "This record does not activate agent-market factories, hosted trading, automatic funding, fee keepers or social publishing."
   ],
   "missingForTokenPrediction": [],
-  "chainObservation": {
-    "checkedAt": "2026-10-02T02:13:19.232Z",
-    "rpcHost": "ethereum-rpc.publicnode.com",
-    "blockNumber": "26101576",
-    "confirmedNonce": 0,
-    "pendingNonce": 0,
-    "deployerHasCode": false,
-    "nonceSequenceCurrentlyPossible": true
+  "deployedAt": "2026-10-02T03:03:44.904Z",
+  "contracts": [
+    {
+      "contract": "VeylQuoter",
+      "address": "0x8a470CF07638E659211dd116b1ab3aA757a40376",
+      "runtimeCodeHash": "0x37c1eb9a0225b1eee9301588927cd8abdc6beaa17b0d6d508a5f98f2e68d01aa",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xedb508baed917481349066f06a622dc4472001f86192c25f43de1b27101f4c68",
+        "blockNumber": "26101815",
+        "blockHash": "0xa5c9487906f89c62da873ff31bf51ef1f440ab39a5e1ad828ed965c24e7636eb",
+        "confirmations": 13
+      }
+    },
+    {
+      "contract": "VeylProjectBuilder",
+      "address": "0x3F352196444d913146111f31bF6423B041bbDF31",
+      "runtimeCodeHash": "0xe175e59cdd95e1705c4980c14c1f18b45c39eb8415af5642a975fd40fec31a41",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xe3fc28c30f18ebf278d6052573c3711512bc2d7d27a88fa2e0e703d827867ef7",
+        "blockNumber": "26101817",
+        "blockHash": "0x3267c1423a676c7f5edda82ebc20d5ace1d9f109a56160f5a53bb1795c895573",
+        "confirmations": 11
+      }
+    },
+    {
+      "contract": "VeylMarketBuilder",
+      "address": "0x624E2F6d2C196b14A37d504C8404525B1BeD951c",
+      "runtimeCodeHash": "0xc7e310909392c1edfa92bcca8a3100988d515637a60aecfd9df2dbc1a32cd5d7",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x9e91b160b2207e32ed48e7b1fae885a9f532da8dd2046d7dff22c77443ea2618",
+        "blockNumber": "26101819",
+        "blockHash": "0x4663f15dc2b8615fa0e82e2372d99277ecee7c2de56bb2378c372a611530bbec",
+        "confirmations": 9
+      }
+    },
+    {
+      "contract": "VeylMainLiquidityBuilder",
+      "address": "0x6136c29498De82B2270DD589B6D06a6Cb8f31646",
+      "runtimeCodeHash": "0xb30a5c53c58291d844f4f58b4cb758145df6b80f8677de18831f9f1d801b8855",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xccf14db8af67e749adfaf1c43ecc92c27105d82ec4a41d81c991316aae1b8afe",
+        "blockNumber": "26101821",
+        "blockHash": "0x21b5d055445d769e917414f81f35d3b595a8e158ae6ca0bb2ae2d0429cdbd9e7",
+        "confirmations": 7
+      }
+    },
+    {
+      "contract": "VeylMarketFactory",
+      "address": "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
+      "runtimeCodeHash": "0x6f14260f3d30b978702b58579c4b051c2f34914663a9641e7759ff3515cf48c2",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
+    },
+    {
+      "contract": "VeylProjectDeployer",
+      "address": "0x53bE1c465E69F3c9091a80F42B1AA95518581E98",
+      "runtimeCodeHash": "0x073e14e3a365ee1bc9cf333e0a382978b63500cb40fe45f9955d190b3b539ca0",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
+    },
+    {
+      "contract": "VeylMarketDeployer",
+      "address": "0x8b0C2aD6cc0F1c515c2BBFA877C9FAAcb581cC61",
+      "runtimeCodeHash": "0xc676fe86ba827cf1e006951a34e86201854ded54dc7db4a9fe9e02c02102ef87",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
+    },
+    {
+      "contract": "VeylMainLiquidityDeployer",
+      "address": "0xB1AB4d362713bd79e7Dde7E5a43993F76F9A745e",
+      "runtimeCodeHash": "0x58d8d4e63a6275ec31d529da17d5bd1c8270496e2f1d64eca4504a4afa8a70e5",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0x6ec890750d7d2f7f669967721a77b7c6f0545aee65d50f1ecb1c571c1f15abd2",
+        "blockNumber": "26101824",
+        "blockHash": "0xd771e86204e3ff1f75edac5076beae6a93e13ff4ad7fc405b8f622f5d1e89560",
+        "confirmations": 4
+      }
+    },
+    {
+      "contract": "AgentToken",
+      "address": "0x2eaB833d244352D4A7f8dC93285B1776F01954cB",
+      "runtimeCodeHash": "0x6c0f99c7021329cfd5a4fc28221c6c231a8a73771534cb98bc87ccc373348101",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xeaa8fcfdf78089740a34b4296d1c9b7b27a784adad049cc39b862b2f53cf0dcb",
+        "blockNumber": "26101826",
+        "blockHash": "0x4eae8cdd58e1b4eda1ba5e747418134f284a9d6ee27bc77bcc0d290a2b4f9ab9",
+        "confirmations": 2
+      }
+    },
+    {
+      "contract": "AgentTreasury",
+      "address": "0x542dae8fb07077FDAA371b5Be912c75D2C1Be651",
+      "runtimeCodeHash": "0x07016f7470c2125b0bae7935b42c345464d09992224e2df4e5e3a3df01ac8e1d",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xeaa8fcfdf78089740a34b4296d1c9b7b27a784adad049cc39b862b2f53cf0dcb",
+        "blockNumber": "26101826",
+        "blockHash": "0x4eae8cdd58e1b4eda1ba5e747418134f284a9d6ee27bc77bcc0d290a2b4f9ab9",
+        "confirmations": 2
+      }
+    },
+    {
+      "contract": "RevenueRouter",
+      "address": "0xa91c9bE387d1d82c75dbAFdCC6d4e50E4f2379B9",
+      "runtimeCodeHash": "0xa58b3657f111b2ecc4468af19c06c1c7104c2de828885b8ecfe535e4be640b93",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xeaa8fcfdf78089740a34b4296d1c9b7b27a784adad049cc39b862b2f53cf0dcb",
+        "blockNumber": "26101826",
+        "blockHash": "0x4eae8cdd58e1b4eda1ba5e747418134f284a9d6ee27bc77bcc0d290a2b4f9ab9",
+        "confirmations": 2
+      }
+    },
+    {
+      "contract": "VeylFeeHook",
+      "address": "0xf0c906814F9a1a8Eb26756e03B150E3AAf8920CC",
+      "runtimeCodeHash": "0x8d271eb0424c267831dc1cd04d1a9cbe60226c41125a09c50853ce2deff9b753",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xeaa8fcfdf78089740a34b4296d1c9b7b27a784adad049cc39b862b2f53cf0dcb",
+        "blockNumber": "26101826",
+        "blockHash": "0x4eae8cdd58e1b4eda1ba5e747418134f284a9d6ee27bc77bcc0d290a2b4f9ab9",
+        "confirmations": 2
+      }
+    },
+    {
+      "contract": "VeylSwapRouter",
+      "address": "0xA847BE733c61a994a4D565DE41fE07528Be3cc68",
+      "runtimeCodeHash": "0x6fbb794732742157b99a6f08268d876683511659c9063ac015557cb70e79518a",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xeaa8fcfdf78089740a34b4296d1c9b7b27a784adad049cc39b862b2f53cf0dcb",
+        "blockNumber": "26101826",
+        "blockHash": "0x4eae8cdd58e1b4eda1ba5e747418134f284a9d6ee27bc77bcc0d290a2b4f9ab9",
+        "confirmations": 2
+      }
+    },
+    {
+      "contract": "VeylMainLiquidityPosition",
+      "address": "0x7c174A361AF7E181bb427514d9C34046Cd7Bd8Ce",
+      "runtimeCodeHash": "0xc53e4bf3be06c8eec1a4d7bfb47b047b6bce5445d7f7915a9972d7ea043fb2fc",
+      "receipt": {
+        "chainId": 1,
+        "transactionHash": "0xeaa8fcfdf78089740a34b4296d1c9b7b27a784adad049cc39b862b2f53cf0dcb",
+        "blockNumber": "26101826",
+        "blockHash": "0x4eae8cdd58e1b4eda1ba5e747418134f284a9d6ee27bc77bcc0d290a2b4f9ab9",
+        "confirmations": 2
+      }
+    }
+  ],
+  "deploymentObservation": {
+    "source": "reviewed-six-transaction-receipts-and-runtime-check",
+    "chainId": 1,
+    "checkedAt": "2026-10-02T03:03:44.904Z",
+    "blockNumber": "26101827",
+    "runtimeContractsVerified": 14,
+    "reviewDigest": "35740355a0f1cc4aad9d9833999f7421be5398657825e079f9077a3fc6e247b5",
+    "explorerVerificationSubmitted": false
+  },
+  "positionAtDeployment": {
+    "positionManager": "0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e",
+    "positionId": "429089",
+    "owner": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+    "seededTokens": "980000000000000000000012538",
+    "liquidity": "43827373799693085948824",
+    "sentToDead": false
   }
 }
