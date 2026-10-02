@@ -3,6 +3,7 @@ import { getAddress } from 'viem';
 import { Problem } from './agent.mjs';
 import { PublicJournal } from './public-journal.mjs';
 import { ZKAPI_SOURCE_REVISION } from './provider.mjs';
+import { ACCOUNTING_MARGIN_MICRO_USD, accountingIdentity, validateCall } from './charge-accounting.mjs';
 
 const fields = ['version', 'runId', 'daemonOrigin', 'expectedFundingAddress', 'model', 'depositGwei', 'maxDepositTotalWei', 'maxRequestMicroUsd', 'maxCalls', 'maxTotalMicroUsd', 'withdrawalDestination', 'maxWithdrawalFeeWei', 'exclusiveProfile'];
 const phaseNames = new Set(['new', 'deposit-prepared', 'deposit-submitting', 'deposit-pending', 'deposit-active', 'job-submitting', 'job-finished', 'withdrawal-quoting', 'withdrawal-ready', 'withdrawal-submitting', 'withdrawal-pending', 'complete']);
@@ -11,6 +12,16 @@ const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const wei = value => typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value) && BigInt(value) <= 10n ** 18n;
 const address = value => { try { const result = getAddress(value).toLowerCase(); if (/^0x0{40}$/.test(result)) throw new Error(); return result; } catch { throw new Problem('Acceptance requires explicit nonzero public addresses.'); } };
+
+export function acceptanceReservation(model, ceiling) {
+  if (!model || !integer(model.oa_request_limit_micro_usd, 1, 6_000_000) || model.oa_accounting_margin_micro_usd !== ACCOUNTING_MARGIN_MICRO_USD) return null;
+  const reserved = model.oa_request_limit_micro_usd + ACCOUNTING_MARGIN_MICRO_USD;
+  return reserved <= ceiling ? reserved : null;
+}
+
+export function acceptanceProvider(provider, dispatch) {
+  return { mode: 'zkapi', models: () => provider.models(), accountingIdentity: () => provider.accountingIdentity(), callSettlement: callId => provider.callSettlement(callId), complete: (body, accounting) => dispatch(body, accounting) };
+}
 
 export function acceptancePlan(input) {
   if (!exactKeys(input, fields) || input.version !== 1 || !/^[a-f0-9-]{36}$/.test(input.runId || '') || input.exclusiveProfile !== true ||
@@ -22,10 +33,10 @@ export function acceptancePlan(input) {
   const config = Object.fromEntries(fields.map(key => [key, input[key]])); config.daemonOrigin = origin.origin;
   config.expectedFundingAddress = address(input.expectedFundingAddress); config.withdrawalDestination = address(input.withdrawalDestination);
   if (config.expectedFundingAddress === config.withdrawalDestination) throw new Problem('Withdrawal destination must differ from the daemon payment address.');
-  const approvalDigest = hash({ scope: 'Veyl funded acceptance v1', sourceRevision: ZKAPI_SOURCE_REVISION, config });
+  const approvalDigest = hash({ scope: 'Veyl funded acceptance v2 durable accounting', sourceRevision: ZKAPI_SOURCE_REVISION, config });
   return { config, approvalDigest, sourceRevision: ZKAPI_SOURCE_REVISION, mode: 'dry-run', paidInferenceCalls: 0, signedTransactions: 0,
     maximums: { modelCalls: config.maxCalls, inferenceMicroUsd: config.maxTotalMicroUsd, depositPrincipalGwei: config.depositGwei, depositIncludingGasWei: config.maxDepositTotalWei, withdrawalGasWei: config.maxWithdrawalFeeWei },
-    boundary: 'One exclusive pre-funded public payment address; one private deposit, one Veyl task using save_note, and one exact-destination whole-note withdrawal. No treasury signer, contract deployment or automatic retry. Verified per-job final billing remains unavailable.' };
+    boundary: 'One exclusive pre-funded public payment address; one private deposit, one Veyl task using save_note, and one exact-destination whole-note withdrawal. No treasury signer, contract deployment or automatic retry. Per-call ceilings include the 1,000 micro-USD accounting margin. Final billing is reported only from verified native settlement receipts; unknown charges retain their reservation.' };
 }
 
 /** Operator-only acceptance state machine. Construction and inspect never sign.
@@ -35,17 +46,29 @@ export class FundedAcceptance {
   constructor({ file, config, provider, funding, kit, expiryGuard, enabled = false }) {
     this.plan = acceptancePlan(config); this.provider = provider; this.funding = funding; this.kit = kit; this.expiryGuard = expiryGuard; this.enabled = enabled === true;
     this.journal = new PublicJournal(file, { version: 1, approvalDigest: this.plan.approvalDigest, phase: 'new', calls: [] }, state => {
-      if (!exactKeys(state, ['version', 'approvalDigest', 'phase', 'calls', 'depositId', 'projectId', 'jobId', 'withdrawalId', 'noteId']) || state.version !== 1 || state.approvalDigest !== this.plan.approvalDigest || !phaseNames.has(state.phase) || !Array.isArray(state.calls) || state.calls.length > this.plan.config.maxCalls ||
-          state.calls.some((call, i) => !exactKeys(call, ['index', 'status']) || call.index !== i || !['dispatching', 'received', 'uncertain'].includes(call.status))) throw new Error('Invalid acceptance recovery state.');
+      if (!exactKeys(state, ['version', 'approvalDigest', 'phase', 'calls', 'accountingJournalId', 'depositId', 'projectId', 'jobId', 'withdrawalId', 'noteId']) || state.version !== 1 || state.approvalDigest !== this.plan.approvalDigest || !phaseNames.has(state.phase) || !Array.isArray(state.calls) || state.calls.length > this.plan.config.maxCalls ||
+          state.calls.some((call, i) => !exactKeys(call, ['index', 'status', 'callId', 'journalId', 'reservedMicroUsd']) || call.index !== i || !['dispatching', 'received', 'uncertain'].includes(call.status) || !/^[a-f0-9-]{36}$/.test(call.callId || '') || call.journalId !== state.accountingJournalId || !integer(call.reservedMicroUsd, 1, this.plan.config.maxRequestMicroUsd)) || new Set(state.calls.map(call => call.callId)).size !== state.calls.length || state.calls.reduce((sum, call) => sum + call.reservedMicroUsd, 0) > this.plan.config.maxTotalMicroUsd) throw new Error('Invalid acceptance recovery state.');
+      if (state.accountingJournalId !== undefined && !/^[a-f0-9]{32}$/.test(state.accountingJournalId)) throw new Error('Invalid acceptance accounting journal.');
       for (const name of ['depositId', 'projectId', 'jobId', 'withdrawalId']) if (state[name] !== undefined && !/^[a-f0-9-]{36}$/.test(state[name])) throw new Error('Invalid acceptance identity.');
       if (state.noteId !== undefined && !integer(state.noteId, 0, 0xffffffff)) throw new Error('Invalid acceptance note.');
     });
   }
-  report() { const state = this.journal.snapshot(); return { ...state, mode: 'funded-acceptance', maximums: this.plan.maximums, paidCallsAttempted: state.calls.length, actualBilledUsageVerified: false, noAutomaticInferenceRetry: true }; }
+  report() {
+    const state = this.journal.snapshot(), entries = state.projectId ? this.kit.accountingCalls(state.projectId) : [];
+    let settledCalls = 0, chargeWei = 0n, valuationMicroUsd = 0;
+    for (const saved of state.calls) {
+      const entry = entries.find(({ target }) => target.callAccounting.callId === saved.callId), call = entry?.target.callAccounting;
+      if (!call) continue;
+      validateCall(call, { journalId: saved.journalId, cap: saved.reservedMicroUsd, modelCap: entry.job.modelCap });
+      if (call.status === 'settled') { settledCalls++; chargeWei += BigInt(call.chargeWei); valuationMicroUsd += call.valuationMicroUsd; }
+    }
+    return { ...state, mode: 'funded-acceptance', maximums: this.plan.maximums, paidCallsAttempted: state.calls.length, actualBilledUsageVerified: state.calls.length > 0 && settledCalls === state.calls.length,
+      billing: { settledCalls, pendingCalls: state.calls.length - settledCalls, chargeWei: chargeWei.toString(), valuationMicroUsd }, noAutomaticInferenceRetry: true };
+  }
   async inspect() {
     const diagnostics = await this.provider.diagnostics(), models = await this.provider.models();
     const selected = models.find(model => model.id === this.plan.config.model);
-    return { ...this.plan, mode: 'read-only', diagnostics, selectedModel: selected || null, modelWithinApprovedCeiling: !!selected && selected.oa_request_limit_micro_usd <= this.plan.config.maxRequestMicroUsd };
+    return { ...this.plan, mode: 'read-only', diagnostics, selectedModel: selected || null, modelWithinApprovedCeiling: acceptanceReservation(selected, this.plan.config.maxRequestMicroUsd) !== null };
   }
   armed(digest) { if (!this.enabled || digest !== this.plan.approvalDigest) throw new Problem('Paid acceptance is disabled. It requires operator enablement and the exact reviewed plan digest.', 403); }
   save(phase) { if (phase) this.journal.state.phase = phase; this.journal.save(); }
@@ -63,7 +86,11 @@ export class FundedAcceptance {
       if (s.phase === 'complete') return this.report();
       if (typeof this.expiryGuard?.assertCanInfer !== 'function') throw new Problem('Paid acceptance requires the canonical note-expiry guard.', 409);
       const diagnostics = await this.provider.diagnostics(), models = await this.provider.models(), model = models.find(item => item.id === c.model);
-      if (diagnostics.configuration !== 'daemon-reported match' || diagnostics.backend !== 'zkapi' || diagnostics.network !== 'mainnet' || diagnostics.requestBudgetPolicy !== 'model' || !model || model.oa_request_limit_micro_usd > c.maxRequestMicroUsd) throw new Problem('The dedicated daemon or model does not match the approved acceptance plan.', 409);
+      if (diagnostics.configuration !== 'daemon-reported match' || diagnostics.backend !== 'zkapi' || diagnostics.network !== 'mainnet' || diagnostics.requestBudgetPolicy !== 'model' || acceptanceReservation(model, c.maxRequestMicroUsd) === null) throw new Problem('The dedicated daemon or model reservation including accounting margin does not match the approved acceptance plan.', 409);
+      if (typeof this.provider.accountingIdentity !== 'function' || typeof this.provider.callSettlement !== 'function') throw new Problem('Acceptance requires durable per-call accounting before funding.', 503);
+      const identity = accountingIdentity(await this.provider.accountingIdentity());
+      if (s.accountingJournalId && s.accountingJournalId !== identity.journal_id) throw new Problem('Acceptance accounting journal changed. Preserve recovery state; no new operation was sent.', 503);
+      if (!s.accountingJournalId) { s.accountingJournalId = identity.journal_id; this.save(); }
       if (!this.funding.capabilities().approvalEnabled || this.funding.capabilities().daemonOrigin !== c.daemonOrigin) throw new Problem('Dedicated daemon approvals are disabled or the origin changed.', 403);
       if (s.phase === 'new') {
         const status = await this.funding.inspect();
@@ -93,6 +120,8 @@ export class FundedAcceptance {
         this.save('job-finished');
       }
       if (s.phase === 'job-finished') {
+        await this.kit.reconcileCalls(s.projectId, this.provider, { limit: c.maxCalls });
+        if (!this.report().actualBilledUsageVerified) return { ...this.report(), nextAction: 'Wait for verified native settlement receipts, then resume this same acceptance. Unknown charges retain their reservation; no inference is repeated.' };
         const status = await this.funding.inspectOperation('withdrawal');
         if (status.phase !== 'ready') return { ...this.report(), nextAction: 'Wait for daemon settlement, then run this same approved acceptance again. No inference is repeated.' };
         if (address(status.address) !== c.expectedFundingAddress || !integer(status.noteId, 0, 0xffffffff) || BigInt(status.privateBalanceGwei) > BigInt(c.depositGwei)) throw new Problem('Withdrawal note does not match the dedicated acceptance deposit.', 409);
@@ -114,14 +143,17 @@ export class FundedAcceptance {
       return this.report();
     });
   }
-  async dispatch(body) {
+  async dispatch(body, accounting) {
     // The Kit wrapper must call this method for every model round. Recording the
     // attempt before I/O prevents restart or lost responses from buying again.
     const s = this.journal.state, c = this.plan.config;
     if (!this.enabled || s.phase !== 'job-submitting' || body.model !== c.model || s.calls.length >= c.maxCalls || s.calls.some(call => call.status !== 'received')) throw new Problem('Acceptance call limit or recovery state prohibits another paid request.', 409);
+    const entry = s.projectId && this.kit.accountingCalls(s.projectId).find(({ target }) => target.callAccounting.callId === accounting?.callId), callState = entry?.target.callAccounting;
+    if (!callState || callState.status !== 'pending' || callState.journalId !== s.accountingJournalId || accounting.journalId !== s.accountingJournalId || accounting.reservedMicroUsd !== callState.reservedMicroUsd || callState.requestHash !== hash(body) || !integer(accounting.reservedMicroUsd, 1, c.maxRequestMicroUsd) || s.calls.some(call => call.callId === accounting.callId) || s.calls.reduce((sum, call) => sum + call.reservedMicroUsd, 0) + accounting.reservedMicroUsd > c.maxTotalMicroUsd) throw new Problem('Acceptance requires the exact saved model-call reservation within the approved ceilings.', 409);
+    validateCall(callState, { journalId: s.accountingJournalId, cap: accounting.reservedMicroUsd, modelCap: entry.job.modelCap });
     await this.expiryGuard.assertCanInfer();
-    const call = { index: s.calls.length, status: 'dispatching' }; s.calls.push(call); this.save();
-    try { const result = await this.provider.complete(body); call.status = 'received'; this.save(); return result; }
+    const call = { index: s.calls.length, status: 'dispatching', callId: accounting.callId, journalId: accounting.journalId, reservedMicroUsd: accounting.reservedMicroUsd }; s.calls.push(call); this.save();
+    try { const result = await this.provider.complete(body, accounting); call.status = 'received'; this.save(); return result; }
     catch (error) { call.status = 'uncertain'; this.save(); throw error; }
   }
   async resume({ approvalDigest, kind, transactionHash }) {

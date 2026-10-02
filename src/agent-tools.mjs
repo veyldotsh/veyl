@@ -13,7 +13,7 @@ const catalog = [
     token: { type: ['string', 'null'], description: 'ERC-20 contract address for erc20_balance; null for eth_balance.' }
   })),
   definition('save_note', 'Save a concise durable note in this agent project only. A note is memory, not proof that its contents are true. No other project, filesystem, secrets, or settings can be accessed.', objectSchema({ content: { type: 'string', minLength: 1, maxLength: 8000 } })),
-  definition('prepare_social_draft', 'Prepare a text draft for this project’s connected X or Telegram channel. This only creates a reviewable draft. It never authorizes or performs publishing.', objectSchema({ channel: { type: 'string', enum: ['x', 'telegram'] }, text: { type: 'string', minLength: 1, maxLength: 4000 } }))
+  definition('prepare_social_draft', 'Prepare a text draft for this project’s connected X or Telegram channel. X applies its official 280-character weighted limit on the server, including URL and emoji rules. This only creates a reviewable draft. It never authorizes or performs publishing.', objectSchema({ channel: { type: 'string', enum: ['x', 'telegram'] }, text: { type: 'string', minLength: 1, maxLength: 4096 } }))
 ];
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const availableNames = new Set(catalog.map(t => t.function.name));
@@ -99,7 +99,7 @@ export class AgentTools {
     }
     keys(args, ['channel', 'text']);
     if (!['x', 'telegram'].includes(args.channel)) throw new Problem('Only X and Telegram drafts are supported.');
-    const message = text(args.text, args.channel === 'x' ? 280 : 4000, 'social draft');
+    const message = text(args.text, 4096, 'social draft');
     if (typeof context.prepareSocialDraft !== 'function') throw new Problem('Connect a social channel to this project before preparing a draft.', 409);
     if (typeof context.jobId !== 'string' || typeof context.callId !== 'string' || !context.jobId || !context.callId || context.jobId.length > 128 || context.callId.length > 128) throw new Problem('A durable job and tool call identity is required for social drafts.', 409);
     const result = await context.prepareSocialDraft({ channel: args.channel, text: message, madeWithAi: true,

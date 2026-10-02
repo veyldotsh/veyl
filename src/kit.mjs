@@ -279,7 +279,11 @@ export class Kit {
       const calls = result?.toolCalls || [];
       if (!calls.length) return result;
       if (!tools || round === 3 || calls.length > 4) throw new Problem('The model exceeded the allowed tool rounds.', 502);
-      messages.push({ role: 'assistant', content: result.answer || null, tool_calls: calls });
+      const assistant = { role: 'assistant', content: result.answer || null, tool_calls: calls };
+      // Provider-validated opaque continuation stays only in this stage's
+      // in-memory messages. The next request hash includes these exact fields.
+      for (const field of ['reasoning_details', 'reasoning', 'reasoning_content']) if (Object.hasOwn(result.reasoningContinuation || {}, field)) assistant[field] = result.reasoningContinuation[field];
+      messages.push(assistant);
       for (const call of calls) {
         this.store.assertHealthy(); if (p.status !== 'active') throw new Problem('Paused before the next tool call.', 409);
         const activity = { id: call.id, name: call.function.name, at: this.now().toISOString(), status: 'running' };

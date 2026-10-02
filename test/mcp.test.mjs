@@ -80,7 +80,7 @@ test('MCP rejects extra authority, invalid paths, malformed keys and empty paylo
     ['veyl_project', { projectId: 'other-project' }], ['veyl_job', { jobId: '../funding' }],
     ['veyl_submit_job', { requestKey: 'short', prompt: 'Work' }], ['veyl_submit_job', { requestKey, prompt: 'Work', approve: true }],
     ['veyl_save_memory', { requestKey, content: '   ' }], ['veyl_save_memory', { requestKey: requestKey + '_', content: 'Note' }],
-    ['veyl_prepare_draft', { channel: 'x', text: 'x'.repeat(281), idempotencyKey: requestKey }],
+    ['veyl_prepare_draft', { channel: 'x', text: 'x'.repeat(4097), idempotencyKey: requestKey }],
     ['veyl_prepare_draft', { channel: 'telegram', text: 'Hello', idempotencyKey: requestKey, publish: true }],
     ['veyl_prepare_draft', { channel: 'email', text: 'Hello', idempotencyKey: requestKey }]
   ]) {
@@ -114,6 +114,13 @@ test('MCP reports missing token scopes and strips arbitrary thrown error details
   const unknown = (await p.call('veyl_prepare_draft', { channel: 'telegram', text: 'Hello', idempotencyKey: requestKey })).result;
   assert.equal(unknown.structuredContent.uncertain, true);
   assert.equal(JSON.stringify(unknown).includes(token), false);
+});
+
+test('MCP forwards long raw X URLs for server-side weighted counting', async t => {
+  const text = 'https://example.com/' + 'a'.repeat(300); let seen;
+  const p = await protocol(t, { prepareDraft: async args => { seen = args; return { draft: { preview: { text: args.text } } }; } });
+  const reply = (await p.call('veyl_prepare_draft', { channel: 'x', text, idempotencyKey: requestKey })).result;
+  assert.equal(reply.isError, undefined); assert.equal(seen.text, text);
 });
 
 test('MCP executable uses clean stdio and exits after input closes, without contacting the API', async t => {

@@ -16,20 +16,22 @@ authenticated loopback API and companion before funding. It changes no proofs,
 settlement checks, signing approvals or inference-solvency checks. It does not
 fund anything during startup.
 
-On Linux, apply the patch to that source tree and build with Go 1.25:
+Production uses the accounting extension as well as the control-mode patch.
+Build both components on Linux ARM64 with the compiler versions pinned in
+`deployment/native/source-lock.json`, using two fresh build directories:
 
 ```sh
-node scripts/patch-zkapi-control.mjs /path/to/zkapi
-cd /path/to/zkapi/zkapi-clientd
-go test ./cmd/zkapi-clientd ./internal/config ./internal/zkapi ./internal/server
-CGO_ENABLED=0 go build -trimpath -ldflags '-X main.version=veyl-b826c169-control1' -o /path/to/veyl/bin/zkapi-clientd ./cmd/zkapi-clientd
-/path/to/veyl/bin/zkapi-clientd --config-dir /private/project/profile serve-control
+node scripts/build-native-accounting.mjs /path/to/fresh-wallet-build wallet
+node scripts/build-native-accounting.mjs /path/to/fresh-daemon-build go
 ```
 
-Use the source-compatible native wallet companion and verified proof assets.
-The companion's private files are never read by Veyl's application database.
-`key_reuse_window_seconds` is set to zero for isolated per-request leases.
-This does not by itself provide a signed per-job billing receipt.
+These builders apply the pinned patches, verify source hashes and run the native
+test suites before producing artifacts. Install only an explicitly accepted build
+with the source-compatible wallet companion and verified proof assets, following
+`deployment/native/README.md`. The companion's private files are never read by
+Veyl's application database. `key_reuse_window_seconds` is zero for isolated
+per-request leases. A control-only daemon is insufficient for tracked per-job
+accounting; the daemon and wallet must expose the matching accounting protocol.
 
 ## Funding lifecycle
 
@@ -75,9 +77,13 @@ paid-call boundary checks again: warn within seven days, stop new calls at
 three days, and block unknown expiry, stale RPC state, or a nonactive note.
 The guard is read-only and does not disable the manual withdrawal controls.
 The stop window provides time to act, not a guarantee of successful recovery.
-No automatic pre-expiry withdrawal/renewal or funded expiry-recovery acceptance
-is claimed. Those remain requirements before enabling unattended real-money
-operation; retain only a small working deposit in the daemon.
+The independent owner expiry-closure opt-in lets `TreasuryRunway` request whole-
+note closure within seven days, return funds to the same treasury, and redeposit
+only after confirmed closure and under the configured caps. It requires fresh
+active-note evidence, an idle runtime and separately enabled operators. It does
+not guarantee recovery during downtime, insufficient gas or provider failures.
+Funded expiry-recovery acceptance remains unperformed; retain only a bounded
+working deposit in the daemon.
 
 ## What zkAPI verifies
 
@@ -216,6 +222,13 @@ Configure a developer app with `tweet.read tweet.write users.read offline.access
 and callback `https://veyl.sh/oauth/x`. App access and account/API entitlements
 are provider requirements; no Veyl test creates those credentials.
 
+X text validation uses the official `twitter-text` 3.1.0 parser: shortened URLs,
+combined emoji and NFC normalization follow the provider's weighted limit.
+SDK/MCP/browser inputs allow up to 4,096 raw characters, then the server applies
+X's 280 weighted-character limit before saving. The literal reviewed text stays
+unchanged. `madeWithAi` records assistance inside Veyl; this text-only connector
+does not send X's `made_with_ai` flag, which describes AI-generated media.
+
 Telegram requires a bot token entered securely and an exact numeric chat ID.
 The connector verifies the bot and chat with read-only API methods; group or
 channel publishing requires bot administrator rights, including channel posting
@@ -247,4 +260,6 @@ funded zkAPI session or live social account acceptance.
 - [Public native-ETH billing quote](https://zkapi-mainnet.openanonymity.ai/v2/billing/quote)
 - [X OAuth 2.0 and PKCE](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code)
 - [X create post endpoint](https://docs.x.com/x-api/posts/create-post)
+- [X character counting](https://docs.x.com/fundamentals/counting-characters)
+- [Official twitter-text package version and source](https://github.com/twitter/twitter-text/blob/master/js/package.json)
 - [Telegram Bot API](https://core.telegram.org/bots/api)

@@ -32,7 +32,7 @@ test('server-supplied text is escaped and no result-provided URL can become a li
   const snapshot = fixture(), item = snapshot.outbox[0]; item.result = { id: '123', url: 'javascript:attack()' }; const element = new Element();
   const panel = mountSocialPanel(element, { project, hosted: true, api: async () => snapshot, now: () => now }); await panel.ready;
   element.fire('click', control('review', { intent: item.id }));
-  assert.match(element.innerHTML, /&lt;img src=x onerror=&quot;attack\(\)&quot;&gt;/); assert.match(element.innerHTML, /Project &lt;script&gt;/); assert.doesNotMatch(element.innerHTML, /<img src=x|javascript:attack|<script>untrusted/); panel.destroy();
+  assert.match(element.innerHTML, /&lt;img src=x onerror=&quot;attack\(\)&quot;&gt;/); assert.match(element.innerHTML, /Project &lt;script&gt;/); assert.doesNotMatch(element.innerHTML, /<img src=x|javascript:attack|<script>untrusted/); assert.match(element.innerHTML, /AI-assisted draft: yes/); assert.match(element.innerHTML, /maxlength="4096"/); assert.doesNotMatch(element.innerHTML, /AI content label/); panel.destroy();
 });
 
 test('publishing requires backend enablement and exact reviewed digest', async () => {

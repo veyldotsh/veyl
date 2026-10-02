@@ -61,7 +61,7 @@ test('social drafting does not publish; exact human digest sends once and persis
   const f = fixture(t); await connectX(f); const item = await draft(f.service);
   assert.equal(item.status, 'draft'); assert.equal(f.calls.some(c => c.url.pathname === '/2/tweets'), false);
   await assert.rejects(f.service.publish({ ...approve(item), approvalDigest: '0'.repeat(64) }), e => e.status === 409);
-  f.intercept(call => { if (call.url.pathname === '/2/tweets') { assert.equal(f.state().outbox[0].status, 'sending'); assert.deepEqual(call.body, { text: item.preview.text, made_with_ai: true }); } });
+  f.intercept(call => { if (call.url.pathname === '/2/tweets') { assert.equal(f.state().outbox[0].status, 'sending'); assert.deepEqual(call.body, { text: item.preview.text }); } });
   const sent = await f.service.publish(approve(item)); assert.equal(sent.status, 'published'); assert.equal(sent.result.url, 'https://x.com/i/status/98765');
   await f.service.publish(approve(item)); await f.restart().publish(approve(item)); assert.equal(f.calls.filter(c => c.url.pathname === '/2/tweets').length, 1);
 });
@@ -108,4 +108,16 @@ test('publishing gates, stale-account preview and idempotency protect the outbox
 test('stale social process fails closed instead of overwriting newer tokens', async t => {
   const f = fixture(t), stale = f.restart(); await connectX(f);
   await assert.rejects(stale.beginX(), /another process/); assert.equal(f.calls.length, 2);
+});
+
+test('X draft validation follows official URL, NFC and combined-emoji weights without changing approved text', async t => {
+  const f = fixture(t); await connectX(f);
+  const accepted = ['a'.repeat(256) + ' https://x.co', 'https://example.com/' + 'a'.repeat(300), 'e\u0301'.repeat(280), 'Ā'.repeat(280), '👨‍👩‍👧‍👦'.repeat(140)];
+  for (const [index, text] of accepted.entries()) {
+    const item = await f.service.draft({ channel: 'x', text, idempotencyKey: 'accepted-text-' + index });
+    assert.equal(item.preview.text, text); assert.equal(item.preview.madeWithAi, true);
+  }
+  const denied = ['a'.repeat(257) + ' https://x.co', '👨‍👩‍👧‍👦'.repeat(141), 'a'.repeat(281), '\uFEFF'];
+  for (const [index, text] of denied.entries()) await assert.rejects(f.service.draft({ channel: 'x', text, idempotencyKey: 'denied-text-' + index }), /280 weighted|Choose/);
+  assert.equal(f.calls.some(call => call.url.pathname === '/2/tweets'), false);
 });

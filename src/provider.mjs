@@ -4,6 +4,27 @@ import { accountingIdentity, ACCOUNTING_MARGIN_MICRO_USD } from './charge-accoun
 // Interface review pin, not a claim that the local daemon's binary is attested.
 export const ZKAPI_SOURCE_REVISION = 'b826c169b4831665822529f535f824265f50630b';
 
+// OpenRouter reasoning models may require signed/encrypted continuation blocks
+// on the next tool round. Preserve their order and contents, never display or
+// persist them as a deliverable, and never truncate a signed sequence.
+function reasoningContinuation(message) {
+  const invalid = () => { throw new Problem('Invalid or oversized model reasoning continuation. Budget stays reserved.', 502); };
+  for (const field of ['reasoning', 'reasoning_content']) if (message[field] != null && typeof message[field] !== 'string') invalid();
+  const details = message.reasoning_details;
+  if (details != null) {
+    if (!Array.isArray(details) || details.length > 64) invalid();
+    const payloads = { 'reasoning.text': 'text', 'reasoning.encrypted': 'data', 'reasoning.summary': 'summary' };
+    for (const block of details) {
+      if (!block || Array.isArray(block) || typeof block !== 'object' || !Object.hasOwn(payloads, block.type) || typeof block[payloads[block.type]] !== 'string' ||
+          (block.id != null && typeof block.id !== 'string') || (block.format != null && typeof block.format !== 'string') ||
+          (block.signature != null && typeof block.signature !== 'string') || (block.index !== undefined && (!Number.isSafeInteger(block.index) || block.index < 0))) invalid();
+    }
+  }
+  const continuation = details?.length ? { reasoning_details: details } : typeof message.reasoning === 'string' ? { reasoning: message.reasoning } : typeof message.reasoning_content === 'string' ? { reasoning_content: message.reasoning_content } : details ? { reasoning_details: details } : {};
+  if (Buffer.byteLength(JSON.stringify(continuation)) > 128 * 1024) invalid();
+  return continuation;
+}
+
 export class DemoProvider {
   mode = 'demo';
   async models() { return [{ id: 'demo/research-agent', oa_request_limit_micro_usd: 500_000 }]; }
@@ -113,6 +134,6 @@ export class ZkApiProvider {
     // Provider JSON (including usage.cost) and OA ownership-verification headers
     // contain no signed wallet settlement or application-to-lease correlation.
     // The caller must retain its full cap after every live response.
-    return { answer: (answer || '').slice(0, 32_000), ...(toolCalls.length ? { toolCalls } : {}), verification, verificationDetail: detail || null, settlement: { status: 'unreconciled', signedReceiptVerified: false } };
+    return { answer: (answer || '').slice(0, 32_000), ...(toolCalls.length ? { toolCalls, reasoningContinuation: reasoningContinuation(message) } : {}), verification, verificationDetail: detail || null, settlement: { status: 'unreconciled', signedReceiptVerified: false } };
   }
 }

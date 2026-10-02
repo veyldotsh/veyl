@@ -76,8 +76,18 @@ test('social drafting has stable idempotency and never returns approval or publi
   assert.equal(calls[0].idempotencyKey, calls[1].idempotencyKey); assert.equal(calls[0].madeWithAi, true);
   assert.equal(result.published, false); assert.equal(result.requiresHumanReview, true); assert.equal(result.approvalDigest, undefined); assert.equal(result.accessToken, undefined);
   assert.equal(calls[0].projectId, undefined);
-  await assert.rejects(f.tools.execute({ ...call, arguments: { channel: 'x', text: 'x'.repeat(281) } }, f.context), /Invalid/);
+  await assert.rejects(f.tools.execute({ ...call, arguments: { channel: 'x', text: 'x'.repeat(4097) } }, f.context), /Invalid/);
   await assert.rejects(f.tools.execute(call, { ...f.context, prepareSocialDraft: undefined }), /Connect/);
+});
+
+test('social tool forwards bounded long URLs for authoritative server weighting', async () => {
+  const f = fixture(), calls = [], message = 'Source: https://example.com/' + 'a'.repeat(300);
+  f.context.prepareSocialDraft = async args => { calls.push(args); return { id: 'draft-long-url', status: 'draft' }; };
+  const result = await f.tools.execute({ name: 'prepare_social_draft', arguments: { channel: 'x', text: message } }, f.context);
+  assert.equal(f.tools.schemas().find(s => s.function.name === 'prepare_social_draft').function.parameters.properties.text.maxLength, 4096);
+  assert.equal(calls.length, 1); assert.equal(calls[0].text, message); assert.equal(result.text, message); assert.equal(result.published, false);
+  f.context.prepareSocialDraft = async () => { throw new Error('X draft exceeds the weighted limit.'); };
+  await assert.rejects(f.tools.execute({ name: 'prepare_social_draft', arguments: { channel: 'x', text: 'x'.repeat(281) } }, f.context), /weighted limit/);
 });
 
 test('invalid argument objects and absent runtime scope are rejected before callbacks', async () => {

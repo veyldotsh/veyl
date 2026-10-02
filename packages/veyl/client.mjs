@@ -56,7 +56,7 @@ export class VeylClient {
   drafts() { return this.#request('drafts'); }
   prepareDraft({ channel, text: content, idempotencyKey, madeWithAi = true } = {}) {
     if (!['x', 'telegram'].includes(channel) || typeof madeWithAi !== 'boolean') throw new TypeError('Choose x or telegram and a boolean madeWithAi value.');
-    if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) throw new TypeError('Use an 8 to 128 character draft key containing letters, digits, underscore or hyphen.'); text(content, channel === 'x' ? 280 : 4096, 'text');
+    if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) throw new TypeError('Use an 8 to 128 character draft key containing letters, digits, underscore or hyphen.'); text(content, 4096, 'text');
     return this.#request('drafts', { channel, text: content, idempotencyKey, madeWithAi });
   }
 }

@@ -17,5 +17,6 @@ export class VeylClient {
   memory(): Promise<{ memory: Memory[] }>;
   saveMemory(input: { requestKey: string; content: string }): Promise<{ memory: Memory }>;
   drafts(): Promise<{ drafts: Draft[] }>;
+  /** At most 4096 raw characters; X weighting is checked by the server. madeWithAi is local draft provenance, not an X media label. */
   prepareDraft(input: { channel: 'x' | 'telegram'; text: string; idempotencyKey: string; madeWithAi?: boolean }): Promise<{ draft: Draft }>;
 }

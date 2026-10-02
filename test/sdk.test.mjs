@@ -34,7 +34,7 @@ test('SDK validates keys, channels and paths before sending any request', () => 
   const f = fixture();
   for (const key of ['', 'short', '../not-a-project-key']) assert.throws(() => f.client.submitJob({ requestKey: key, prompt: 'Brief' }));
   assert.throws(() => f.client.job('../funding/approve')); assert.throws(() => f.client.prepareDraft({ channel: 'email', text: 'Hello', idempotencyKey: requestKey }));
-  assert.throws(() => f.client.prepareDraft({ channel: 'x', text: 'x'.repeat(281), idempotencyKey: requestKey })); assert.equal(f.calls.length, 0);
+  assert.throws(() => f.client.prepareDraft({ channel: 'x', text: 'x'.repeat(4097), idempotencyKey: requestKey })); assert.equal(f.calls.length, 0);
 });
 test('SDK exposes only scoped routes and supports read-only reconciliation by exact request key', async () => {
   const f = fixture(() => new Response('{}'));
@@ -48,4 +48,10 @@ test('SDK refuses malformed or oversized responses without retrying or exposing 
   for (const body of ['not JSON', '[]', 'x'.repeat(1024 * 1024 + 1)]) {
     const f = fixture(() => new Response(body)); await assert.rejects(f.client.submitJob({ requestKey, prompt: 'Brief' }), e => e instanceof VeylApiError && e.uncertain); assert.equal(f.calls.length, 1);
   }
+});
+
+test('SDK forwards bounded raw X text for official server-side weighting instead of rejecting long URLs', async () => {
+  const f = fixture(() => new Response('{}')), text = 'https://example.com/' + 'a'.repeat(300);
+  await f.client.prepareDraft({ channel: 'x', text, idempotencyKey: requestKey });
+  assert.equal(JSON.parse(f.calls[0].init.body).text, text); assert.equal(f.calls.length, 1);
 });

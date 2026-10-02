@@ -3,6 +3,7 @@ import { openSync, closeSync, readFileSync, unlinkSync } from 'node:fs';
 import { getAddress } from 'viem';
 import { SealedState } from './encrypted-state.mjs';
 import { Problem } from './agent.mjs';
+import twitterText from 'twitter-text';
 
 const SCOPES = ['tweet.read', 'tweet.write', 'users.read', 'offline.access'];
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -135,8 +136,10 @@ export class SocialService {
   draft({ channel, text, idempotencyKey, madeWithAi = true } = {}) {
     return this.#exclusive(() => {
       if (!CHANNELS.has(channel) || typeof text !== 'string' || !text.trim() || /\u0000/.test(text) || typeof madeWithAi !== 'boolean' || typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) throw new Problem('Choose a connected channel, message and unique draft key.');
-      const weight = [...text].reduce((n, char) => n + (char.codePointAt(0) > 255 ? 2 : 1), 0);
-      if ((channel === 'x' && weight > 280) || (channel === 'telegram' && text.length > 4096)) throw new Problem(channel === 'x' ? 'Shorten the post to 280 weighted characters; non-Latin characters count as two.' : 'Telegram text must be at most 4096 characters.');
+      if (text.length > 4096) throw new Problem('Draft text must be at most 4096 characters.');
+      // X's official parser handles URL shortening, NFC and combined emoji.
+      // Keep the literal reviewed text; the parser's normalization is only for validation.
+      if (channel === 'x' && !twitterText.parseTweet(text).valid) throw new Problem('Use valid X text within 280 weighted characters. URLs count as 23 and combined emoji as two.');
       const account = this.#store.data.accounts[channel]; if (!account || account.status !== 'connected') throw new Problem('Connect this project to the selected channel first.', 409);
       const preview = { projectId: this.#projectId, channel, connectionId: account.connectionId, accountId: account.id, username: account.username, ...(channel === 'telegram' ? { chatId: account.chatId, chatTitle: account.chatTitle } : { madeWithAi }), text };
       const old = this.#store.data.outbox.find(i => i.key === idempotencyKey);
@@ -158,7 +161,9 @@ export class SocialService {
       item.status = 'sending'; this.#save();
       try {
         if (item.channel === 'x') {
-          const raw = await this.#request('https://api.x.com/2/tweets', { method: 'POST', headers: { Authorization: 'Bearer ' + accessToken }, body: { text: item.preview.text, made_with_ai: item.preview.madeWithAi } });
+          // made_with_ai describes generated media in X's API. This connector
+          // sends text only; madeWithAi remains local draft provenance.
+          const raw = await this.#request('https://api.x.com/2/tweets', { method: 'POST', headers: { Authorization: 'Bearer ' + accessToken }, body: { text: item.preview.text } });
           const publishedId = id(raw.data?.id); item.result = { id: publishedId, url: `https://x.com/i/status/${publishedId}` };
         } else {
           const raw = await this.#telegram(account.token, 'sendMessage', { chat_id: item.preview.chatId, text: item.preview.text, link_preview_options: { is_disabled: true } });

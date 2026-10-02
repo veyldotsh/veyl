@@ -19,6 +19,8 @@ Methods: `project`, `models`, `jobs`, `job(id)`, `submitJob`, `memory`, `saveMem
 
 Scopes are `read`, `jobs`, `memory`, `drafts`. They cannot fund a wallet, trade, change treasury policy, approve or publish a social post. Task submission can spend the project's existing inference allowance if funded and enabled. Draft preparation requires an existing connected account; owner review and separately enabled publishing remain mandatory.
 
+Drafts accept up to 4,096 raw characters. The server uses X's official parser for its 280 weighted-character limit, including URL shortening, combined emoji and Unicode normalization. `madeWithAi` records AI assistance in Veyl's review; it does not request an X media label for a text-only post.
+
 Run the included local stdio MCP adapter with `VEYL_API_TOKEN` supplied through the host's protected environment:
 
 ```sh

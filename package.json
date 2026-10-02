@@ -19,6 +19,7 @@
     "node": "22.x"
   },
   "dependencies": {
+    "twitter-text": "3.1.0",
     "viem": "2.57.2"
   },
   "devDependencies": {
