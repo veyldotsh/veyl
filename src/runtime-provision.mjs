@@ -7,6 +7,9 @@ import { Problem } from './agent.mjs';
 import { ZkApiProvider, ZKAPI_SOURCE_REVISION } from './provider.mjs';
 
 const secret = () => randomBytes(32).toString('hex');
+// Reviewed mainnet issuer rotation, ethereum/zkapi 045b444ea1b52538d1b40273c7cb6ed09468a052.
+const MAINNET_VERIFIER = 'https://verifier-production-20260917.openanonymity.ai';
+const FORMER_MAINNET_VERIFIER = 'https://verifier2.openanonymity.ai';
 async function free(port) {
   return new Promise(resolve => { const server = createServer(); server.once('error', () => resolve(false)); server.listen(port, '127.0.0.1', () => server.close(() => resolve(true))); });
 }
@@ -105,9 +108,14 @@ export class RuntimeProvisioner {
     mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
     if (lstatSync(configDirectory).isSymbolicLink()) throw new Problem('Daemon state directory must not be a symlink.', 503);
     const configFile = resolve(configDirectory, 'config.json'), tokenFile = resolve(configDirectory, 'management-token');
-    const configuration = { listen: `127.0.0.1:${new URL(entry.origin).port}`, api_key: entry.key, require_api_key: true, key_reuse_window_seconds: 0, backend: 'zkapi', verifier_url: 'https://verifier2.openanonymity.ai', relay_url: '', concurrency: 1, zkapi: { client_url: `http://127.0.0.1:${entry.companionPort}`, bridge_token: entry.bridgeToken, network: 'mainnet', binary: this.walletBinary, proof_setup_dir: this.proofSetupDir } };
+    const configuration = { listen: `127.0.0.1:${new URL(entry.origin).port}`, api_key: entry.key, require_api_key: true, key_reuse_window_seconds: 0, backend: 'zkapi', verifier_url: MAINNET_VERIFIER, relay_url: '', concurrency: 1, zkapi: { client_url: `http://127.0.0.1:${entry.companionPort}`, bridge_token: entry.bridgeToken, network: 'mainnet', binary: this.walletBinary, proof_setup_dir: this.proofSetupDir } };
     if (existsSync(configFile)) {
-      if (lstatSync(configFile).isSymbolicLink() || JSON.stringify(JSON.parse(readFileSync(configFile, 'utf8'))) !== JSON.stringify(configuration)) throw new Problem('Saved daemon profile differs from its encrypted registry. Preserve recovery files.', 503);
+      if (lstatSync(configFile).isSymbolicLink()) throw new Problem('Saved daemon profile differs from its encrypted registry. Preserve recovery files.', 503);
+      const saved = JSON.parse(readFileSync(configFile, 'utf8'));
+      // The reviewed Go client migrates this exact former mainnet default in
+      // memory. Preserve configuration bytes, credentials and wallet files.
+      if (saved.verifier_url === FORMER_MAINNET_VERIFIER) saved.verifier_url = MAINNET_VERIFIER;
+      if (JSON.stringify(saved) !== JSON.stringify(configuration)) throw new Problem('Saved daemon profile differs from its encrypted registry. Preserve recovery files.', 503);
     } else writeFileSync(configFile, JSON.stringify(configuration), { mode: 0o600, flag: 'wx' });
     if (existsSync(tokenFile)) {
       if (lstatSync(tokenFile).isSymbolicLink() || readFileSync(tokenFile, 'utf8').trim() !== entry.managementToken) throw new Problem('Saved daemon management credential differs. Preserve recovery files.', 503);

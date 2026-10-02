@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, chmod
 import { execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { patchControlSource } from './patch-zkapi-control.mjs';
+import { prepareAccountingControlSource } from './patch-zkapi-control.mjs';
 
 // Offline wallet fixtures only. This builder never installs, starts or funds a daemon.
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,9 +40,10 @@ function applyPatch(item, directory) {
   for (const file of item.files) if (digest(resolve(directory, file.path)) !== file.patchedSha256LF) throw Error('Patched accounting source differs.');
 }
 if (mode === 'go') {
-  applyPatch(lock.patches.find(item => item.name === 'go'), go);
+  const goPatch = lock.patches.find(item => item.name === 'go');
+  applyPatch(goPatch, go);
   const main = resolve(go, 'zkapi-clientd/cmd/zkapi-clientd/main.go');
-  writeFileSync(main, patchControlSource(readFileSync(main, 'utf8')));
+  writeFileSync(main, prepareAccountingControlSource(readFileSync(main, 'utf8'), goPatch));
   const goVersion = run('go', ['version'], go, true).trim();
   if (!goVersion.includes(`go${lock.goVersion} `)) throw Error('Unexpected Go compiler.');
   run('go', ['test', './...'], resolve(go, 'zkapi-clientd'));

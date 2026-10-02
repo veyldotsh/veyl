@@ -28,6 +28,7 @@ test('daemon provision is idempotent and assigns distinct keys, profiles and loo
   assert.deepEqual(Object.keys(calls[0][2].env).sort(), ['GOMAXPROCS', 'HOME', 'LANG', 'PATH', 'RAYON_NUM_THREADS']);
   const file = resolve(directory, owner, projectId, 'daemon', 'config.json'), config = JSON.parse(readFileSync(file, 'utf8'));
   assert.equal(config.require_api_key, true); assert.equal(config.key_reuse_window_seconds, 0); assert.equal(config.listen, '127.0.0.1:19000');
+  assert.equal(config.verifier_url, 'https://verifier-production-20260917.openanonymity.ai');
   const other = await provisioner.provision(owner, randomUUID());
   assert.notEqual(first.origin, other.origin); assert.notEqual(first.key, other.key); assert.equal(configuration.projects.length, 2);
 });
@@ -66,4 +67,24 @@ test('profile or credential drift blocks daemon startup instead of replacing its
   writeFileSync(resolve(directory, owner, projectId, 'daemon', 'management-token'), 'different');
   await assert.rejects(provisioner.provision(owner, projectId), /credential differs/);
   assert.equal(calls.length, 1);
+});
+test('reviewed former mainnet verifier loads without rewriting credentials or recovery state', async t => {
+  const { provisioner, directory, calls } = fixture(t), projectId = randomUUID();
+  const entry = await provisioner.prepare(owner, projectId);
+  const dir = resolve(directory, owner, projectId, 'daemon'), file = resolve(dir, 'config.json');
+  const saved = JSON.parse(readFileSync(file, 'utf8')); saved.verifier_url = 'https://verifier2.openanonymity.ai';
+  const bytes = JSON.stringify(saved); writeFileSync(file, bytes);
+  const recovery = resolve(dir, 'wallet-recovery.fixture'); writeFileSync(recovery, 'preserve existing note and pending request');
+  const actual = await provisioner.provision(owner, projectId);
+  assert.equal(actual, entry); assert.equal(calls.length, 1);
+  assert.equal(readFileSync(file, 'utf8'), bytes); assert.equal(readFileSync(recovery, 'utf8'), 'preserve existing note and pending request');
+});
+test('verifier migration does not accept arbitrary origins or simultaneous profile drift', async t => {
+  for (const mutation of [c => { c.verifier_url = 'https://untrusted.example'; }, c => { c.verifier_url = 'https://verifier2.openanonymity.ai'; c.zkapi.network = 'sepolia'; }, c => { c.verifier_url = 'https://verifier2.openanonymity.ai'; c.zkapi.bridge_token = 'altered'; }]) {
+    const { provisioner, directory, calls } = fixture(t), projectId = randomUUID(); await provisioner.prepare(owner, projectId);
+    const file = resolve(directory, owner, projectId, 'daemon', 'config.json'), saved = JSON.parse(readFileSync(file, 'utf8'));
+    mutation(saved); const bytes = JSON.stringify(saved); writeFileSync(file, bytes);
+    await assert.rejects(provisioner.provision(owner, projectId), /profile differs/);
+    assert.equal(calls.length, 0); assert.equal(readFileSync(file, 'utf8'), bytes);
+  }
 });

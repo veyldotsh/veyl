@@ -1,3 +1,120 @@
+diff --git a/zkapi-clientd/cmd/zkapi-clientd/configure.go b/zkapi-clientd/cmd/zkapi-clientd/configure.go
+index 2a71793..c225407 100644
+--- a/zkapi-clientd/cmd/zkapi-clientd/configure.go
++++ b/zkapi-clientd/cmd/zkapi-clientd/configure.go
+@@ -235,7 +235,7 @@ func configure(ctx context.Context, dir string, args []string, ui setupPrompter,
+ 
+ func applyConfigureOptions(c config.Config, o configureOptions) config.Config {
+ 	if o.fields["network"] {
+-		c.ZKAPI.Network = o.network
++		c = config.SelectNetwork(c, o.network)
+ 	}
+ 	if o.fields["key-reuse-window-seconds"] {
+ 		c.KeyReuseWindowSeconds = o.keyReuseWindowSeconds
+@@ -292,10 +292,11 @@ func saveConfiguredSettings(ctx context.Context, dir string, previous, next conf
+ 
+ func promptConfigure(ctx context.Context, c config.Config, ui setupPrompter, edit bool) (config.Config, error) {
+ 	var err error
+-	c.ZKAPI.Network, err = configureChoice(ctx, ui, "Choose network: mainnet (real ETH) or sepolia (test ETH)", c.ZKAPI.Network, "mainnet", "sepolia")
++	network, err := configureChoice(ctx, ui, "Choose network: mainnet (real ETH) or sepolia (test ETH)", c.ZKAPI.Network, "mainnet", "sepolia")
+ 	if err != nil {
+ 		return c, err
+ 	}
++	c = config.SelectNetwork(c, network)
+ 	if !edit {
+ 		return c, nil
+ 	}
+diff --git a/zkapi-clientd/cmd/zkapi-clientd/main.go b/zkapi-clientd/cmd/zkapi-clientd/main.go
+index 17f2195..82d2bd4 100644
+--- a/zkapi-clientd/cmd/zkapi-clientd/main.go
++++ b/zkapi-clientd/cmd/zkapi-clientd/main.go
+@@ -63,7 +63,7 @@ func run(args []string) error {
+ 		help()
+ 		return nil
+ 	}
+-	if args[0] != "config" && args[0] != "serve" {
++	if args[0] != "config" && args[0] != "serve" && args[0] != "serve-control" {
+ 		return errors.New("unknown command; use zkapi-clientd config or zkapi-clientd serve (--help for usage)")
+ 	}
+ 	if dir == "" {
+@@ -87,6 +87,10 @@ func run(args []string) error {
+ 		fmt.Println("Usage: zkapi-clientd serve\nRun the saved configuration. Run zkapi-clientd config to configure missing prerequisites.")
+ 		return nil
+ 	}
++	// VEYL_UNFUNDED_CONTROL_V1
++	if args[0] == "serve-control" && len(args) != 1 {
++		return errors.New("serve-control accepts no arguments")
++	}
+ 	c, err := config.Load(dir)
+ 	if err != nil {
+ 		return configurationRequired(err)
+@@ -98,6 +102,11 @@ func run(args []string) error {
+ 	if err != nil {
+ 		return err
+ 	}
++	if args[0] == "serve-control" {
++		// Keep the existing authenticated management API available before funding.
++		// The companion and model policy still enforce solvency on each request.
++		return serveSnapshot(ctx, dir, c, expected, os.Stdout)
++	}
+ 	return runConfiguredServe(ctx, dir, c, expected, os.Stdout)
+ 
+ }
+@@ -133,6 +142,11 @@ func initialize(dir string, args []string) error {
+ 	if f.NArg() != 0 {
+ 		return errors.New("unexpected init arguments")
+ 	}
++	verifierExplicit := false
++	f.Visit(func(field *flag.Flag) { verifierExplicit = verifierExplicit || field.Name == "verifier-url" })
++	if !verifierExplicit {
++		c.VerifierURL = config.DefaultVerifierURL(c.ZKAPI.Network)
++	}
+ 	if err := config.Init(dir, c); err != nil {
+ 		return err
+ 	}
+diff --git a/zkapi-clientd/cmd/zkapi-clientd/main_test.go b/zkapi-clientd/cmd/zkapi-clientd/main_test.go
+index 5ed3b56..0a822ed 100644
+--- a/zkapi-clientd/cmd/zkapi-clientd/main_test.go
++++ b/zkapi-clientd/cmd/zkapi-clientd/main_test.go
+@@ -9,6 +9,26 @@ import (
+ 	"github.com/ethereum/zkapi/zkapi-clientd/internal/config"
+ )
+ 
++func TestInitializeUsesNetworkPinnedVerifierUnlessExplicit(t *testing.T) {
++	for _, tc := range []struct {
++		args []string
++		want string
++	}{
++		{nil, "https://verifier-production-20260917.openanonymity.ai"},
++		{[]string{"--network", "sepolia"}, "https://verifier2.openanonymity.ai"},
++		{[]string{"--network", "sepolia", "--verifier-url", "https://explicit.example"}, "https://explicit.example"},
++	} {
++		dir := filepath.Join(t.TempDir(), "profile")
++		if err := initialize(dir, tc.args); err != nil {
++			t.Fatal(err)
++		}
++		loaded, err := config.Load(dir)
++		if err != nil || loaded.VerifierURL != tc.want {
++			t.Fatalf("wrong initialized verifier: %v", err)
++		}
++	}
++}
++
+ func TestInitializeNetworkProxySelection(t *testing.T) {
+ 	for _, test := range []struct {
+ 		name string
+diff --git a/zkapi-clientd/cmd/zkapi-clientd/start.go b/zkapi-clientd/cmd/zkapi-clientd/start.go
+index 0951c72..a23e510 100644
+--- a/zkapi-clientd/cmd/zkapi-clientd/start.go
++++ b/zkapi-clientd/cmd/zkapi-clientd/start.go
+@@ -297,6 +297,7 @@ func prepareStartConfig(ctx context.Context, dir string, options startOptions, u
+ 			ui.Printf("Enter mainnet or sepolia.\n")
+ 		}
+ 	}
++	c.VerifierURL = config.DefaultVerifierURL(c.ZKAPI.Network)
+ 	if options.listen != "" {
+ 		c.Listen = options.listen
+ 	}
 diff --git a/zkapi-clientd/internal/accounting/context.go b/zkapi-clientd/internal/accounting/context.go
 new file mode 100644
 index 0000000..f040f4b
@@ -36,6 +153,145 @@ index 0000000..f040f4b
 +func FromContext(ctx context.Context) (Admission, bool) {
 +	a, ok := ctx.Value(contextKey{}).(Admission)
 +	return a, ok
++}
+diff --git a/zkapi-clientd/internal/config/config.go b/zkapi-clientd/internal/config/config.go
+index 0aab902..8d51dd5 100644
+--- a/zkapi-clientd/internal/config/config.go
++++ b/zkapi-clientd/internal/config/config.go
+@@ -22,6 +22,38 @@ import (
+ const DefaultKeyReuseWindowSeconds = 60
+ const MaxKeyReuseWindowSeconds = 300
+ 
++// Backported from ethereum/zkapi 045b444ea1b52538d1b40273c7cb6ed09468a052.
++const mainnetVerifierURL = "https://verifier-production-20260917.openanonymity.ai"
++const sepoliaVerifierURL = "https://verifier2.openanonymity.ai"
++
++// DefaultVerifierURL is the reviewed verifier for this network. Unknown networks
++// have no default and are rejected by Validate.
++func DefaultVerifierURL(network string) string {
++	switch network {
++	case "mainnet":
++		return mainnetVerifierURL
++	case "sepolia":
++		return sepoliaVerifierURL
++	default:
++		return ""
++	}
++}
++
++// SelectNetwork follows the network's verifier only when the profile uses its
++// default. A separately configured verifier stays explicit across network edits.
++func SelectNetwork(c Config, network string) Config {
++	if isVerifierOrigin(c.VerifierURL, DefaultVerifierURL(c.ZKAPI.Network)) ||
++		(c.ZKAPI.Network == "mainnet" && isVerifierOrigin(c.VerifierURL, sepoliaVerifierURL)) {
++		c.VerifierURL = DefaultVerifierURL(network)
++	}
++	c.ZKAPI.Network = network
++	return c
++}
++
++func isVerifierOrigin(value, origin string) bool {
++	return origin != "" && (value == origin || value == origin+"/")
++}
++
+ type ZKAPI struct {
+ 	ClientURL         string `json:"client_url"`
+ 	BridgeToken       string `json:"bridge_token"`
+@@ -112,7 +144,7 @@ func Default() (Config, error) {
+ 		return Config{}, err
+ 	}
+ 	bridge, err := Secret()
+-	return Config{KeyReuseWindowSeconds: DefaultKeyReuseWindowSeconds, Listen: "127.0.0.1:8787", APIKey: key, Backend: "zkapi", VerifierURL: "https://verifier2.openanonymity.ai", Concurrency: 4, ZKAPI: ZKAPI{ClientURL: "http://127.0.0.1:8790", BridgeToken: bridge, Network: "mainnet"}}, err
++	return Config{KeyReuseWindowSeconds: DefaultKeyReuseWindowSeconds, Listen: "127.0.0.1:8787", APIKey: key, Backend: "zkapi", VerifierURL: DefaultVerifierURL("mainnet"), Concurrency: 4, ZKAPI: ZKAPI{ClientURL: "http://127.0.0.1:8790", BridgeToken: bridge, Network: "mainnet"}}, err
+ }
+ 
+ func Validate(c Config) error {
+@@ -262,6 +294,12 @@ func readConfig(dir string) (Config, error) {
+ 	if d.Decode(&trailing) != io.EOF {
+ 		return Config{}, errors.New("config.json must contain one JSON object")
+ 	}
++	// Older releases saved the former shared default in Mainnet profiles. Adopt
++	// the reviewed Mainnet rotation in memory; loading does not rewrite private
++	// configuration or touch wallet/recovery files. Preserve other verifier URLs.
++	if c.ZKAPI.Network == "mainnet" && isVerifierOrigin(c.VerifierURL, sepoliaVerifierURL) {
++		c.VerifierURL = mainnetVerifierURL
++	}
+ 	if err := Validate(c); err != nil {
+ 		return Config{}, err
+ 	}
+diff --git a/zkapi-clientd/internal/config/verifier_migration_test.go b/zkapi-clientd/internal/config/verifier_migration_test.go
+new file mode 100644
+index 0000000..d690869
+--- /dev/null
++++ b/zkapi-clientd/internal/config/verifier_migration_test.go
+@@ -0,0 +1,68 @@
++package config
++
++import (
++	"bytes"
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestReviewedMainnetVerifierMigrationPreservesSavedState(t *testing.T) {
++	for _, tc := range []struct{ network, saved, expected string }{
++		{"mainnet", sepoliaVerifierURL, mainnetVerifierURL},
++		{"mainnet", sepoliaVerifierURL + "/", mainnetVerifierURL},
++		{"mainnet", mainnetVerifierURL, mainnetVerifierURL},
++		{"mainnet", "https://explicit.example", "https://explicit.example"},
++		{"sepolia", sepoliaVerifierURL, sepoliaVerifierURL},
++	} {
++		t.Run(tc.network+tc.saved, func(t *testing.T) {
++			c, _ := Default()
++			c.ZKAPI.Network = tc.network
++			c.VerifierURL = tc.saved
++			dir := filepath.Join(t.TempDir(), "profile")
++			if err := Init(dir, c); err != nil {
++				t.Fatal(err)
++			}
++			cfg := filepath.Join(dir, "config.json")
++			before, _ := os.ReadFile(cfg)
++			pending := filepath.Join(dir, "pending_journal.json")
++			sentinel := []byte("preserved synthetic pending request")
++			if err := os.WriteFile(pending, sentinel, 0600); err != nil {
++				t.Fatal(err)
++			}
++			got, err := readConfig(dir)
++			if err != nil || got.VerifierURL != tc.expected {
++				t.Fatalf("wrong migration: %v", err)
++			}
++			got.VerifierURL = c.VerifierURL
++			if got != c {
++				t.Fatal("migration changed another field")
++			}
++			after, _ := os.ReadFile(cfg)
++			state, _ := os.ReadFile(pending)
++			if !bytes.Equal(before, after) || !bytes.Equal(state, sentinel) {
++				t.Fatal("migration rewrote saved state")
++			}
++		})
++	}
++}
++
++func TestNetworkVerifierDefaultsPreserveExplicitOverrides(t *testing.T) {
++	c, _ := Default()
++	if c.VerifierURL != mainnetVerifierURL {
++		t.Fatal("wrong mainnet default")
++	}
++	c = SelectNetwork(c, "sepolia")
++	if c.VerifierURL != sepoliaVerifierURL {
++		t.Fatal("wrong Sepolia default")
++	}
++	c = SelectNetwork(c, "mainnet")
++	if c.VerifierURL != mainnetVerifierURL {
++		t.Fatal("wrong mainnet selection")
++	}
++	c.VerifierURL = "https://explicit.example"
++	c = SelectNetwork(c, "sepolia")
++	if c.VerifierURL != "https://explicit.example" || DefaultVerifierURL("unknown") != "" {
++		t.Fatal("explicit trust override changed")
++	}
 +}
 diff --git a/zkapi-clientd/internal/diagnostics/codes.go b/zkapi-clientd/internal/diagnostics/codes.go
 new file mode 100644
@@ -929,6 +1185,100 @@ index b386f1c..94ac2a3 100644
  	waiting, retirementAttempted := false, false
  	for {
  		if err := ctx.Err(); err != nil {
+diff --git a/zkapi-clientd/internal/zkapi/client_queue_test.go b/zkapi-clientd/internal/zkapi/client_queue_test.go
+index 438a4a3..c1c72f1 100644
+--- a/zkapi-clientd/internal/zkapi/client_queue_test.go
++++ b/zkapi-clientd/internal/zkapi/client_queue_test.go
+@@ -347,7 +347,7 @@ func TestSettlementWaitRefreshesModelPolicyBeforeSpending(t *testing.T) {
+ 			}, upstream)
+ 			previous := client.inference.Transport
+ 			client.inference.Transport = budgetTransport(func(r *http.Request) (*http.Response, error) {
+-				if leases.Load() > 0 && r.URL.Host == "org-staging.openanonymity.ai" {
++				if leases.Load() > 0 && r.URL.Host == "org-live.openanonymity.ai" {
+ 					body := `{"example/model":100}`
+ 					if r.URL.Path == "/chat/pinned-models" {
+ 						body = `{"disabled_models":[]}`
+diff --git a/zkapi-clientd/internal/zkapi/client_reuse_test.go b/zkapi-clientd/internal/zkapi/client_reuse_test.go
+index 83ef137..0f02b2b 100644
+--- a/zkapi-clientd/internal/zkapi/client_reuse_test.go
++++ b/zkapi-clientd/internal/zkapi/client_reuse_test.go
+@@ -81,7 +81,7 @@ func TestCachedKeyRevalidatesModelPolicyAndKeepsExactBudget(t *testing.T) {
+ 			client.config.KeyReuseWindow = time.Minute
+ 			previous := client.inference.Transport
+ 			client.inference.Transport = budgetTransport(func(r *http.Request) (*http.Response, error) {
+-				if r.URL.Host != "org-staging.openanonymity.ai" {
++				if r.URL.Host != "org-live.openanonymity.ai" {
+ 					return previous.RoundTrip(r)
+ 				}
+ 				cost := 1
+diff --git a/zkapi-clientd/internal/zkapi/companion.go b/zkapi-clientd/internal/zkapi/companion.go
+index d54097a..5d1c18a 100644
+--- a/zkapi-clientd/internal/zkapi/companion.go
++++ b/zkapi-clientd/internal/zkapi/companion.go
+@@ -91,7 +91,7 @@ func CompanionCommand(ctx context.Context, config Config, companion CompanionCon
+ 		return nil, errors.New("cannot sync private companion directory")
+ 	}
+ 	if companion.VerifierURL == "" {
+-		companion.VerifierURL = "https://verifier2.openanonymity.ai"
++		companion.VerifierURL = deployment.Privacy.VerifierURL
+ 	}
+ 	verifier, err := url.Parse(companion.VerifierURL)
+ 	if err != nil || verifier.Scheme != "https" || verifier.Host == "" || verifier.User != nil || verifier.RawQuery != "" || verifier.Fragment != "" {
+diff --git a/zkapi-clientd/internal/zkapi/deployments.go b/zkapi-clientd/internal/zkapi/deployments.go
+index 8bab1bb..b803f1e 100644
+--- a/zkapi-clientd/internal/zkapi/deployments.go
++++ b/zkapi-clientd/internal/zkapi/deployments.go
+@@ -29,7 +29,8 @@ type deploymentIdentity struct {
+ 	Unit     string             `json:"billing_unit"`
+ 	Proof    proofSetupIdentity `json:"proof_setup"`
+ 	Privacy  struct {
+-		IssuerURL string `json:"issuer_url"`
++		IssuerURL   string `json:"issuer_url"`
++		VerifierURL string `json:"verifier_url"`
+ 	} `json:"privacy_mode"`
+ }
+ 
+@@ -79,7 +80,7 @@ func writeDeploymentManifest(dir string, raw []byte) (string, error) {
+ 		if bytes.Equal(saved, raw) {
+ 			return path, nil
+ 		}
+-		if !isSepoliaOriginMigration(saved, raw) {
++		if !isSepoliaOriginMigration(saved, raw) && !isMainnetIssuerMigration(saved, raw) {
+ 			return "", errors.New("deployment manifest does not match this client's pinned configuration")
+ 		}
+ 	} else if !errors.Is(err, os.ErrNotExist) {
+@@ -120,6 +121,16 @@ func isSepoliaOriginMigration(saved, packaged []byte) bool {
+ 	return matchesManifestMigration(saved, packaged, previousSepoliaManifestSHA256, canonicalSepoliaManifestSHA256)
+ }
+ 
++// This reviewed Mainnet pair changes only the OA issuer and verifier origins.
++// Exact hashes prevent the exception from rebinding a wallet, signing key,
++// proving setup, protocol endpoint or any other manifest field.
++const previousMainnetManifestSHA256 = "68402170b26a77dae6af3eaf7ce6a5b58ff61e7ed2d6d8eace7164304d2bdd7d"
++const productionMainnetManifestSHA256 = "95d784e5039c26109ec58fff971a109cc4466da924992d9a53b87b5dddb37fb6"
++
++func isMainnetIssuerMigration(saved, packaged []byte) bool {
++	return matchesManifestMigration(saved, packaged, previousMainnetManifestSHA256, productionMainnetManifestSHA256)
++}
++
+ func matchesManifestMigration(saved, packaged []byte, sourceSHA256, targetSHA256 string) bool {
+ 	source := sha256.Sum256(saved)
+ 	target := sha256.Sum256(packaged)
+diff --git a/zkapi-clientd/internal/zkapi/deployments/mainnet.json b/zkapi-clientd/internal/zkapi/deployments/mainnet.json
+index 4998f98..b274f2c 100644
+--- a/zkapi-clientd/internal/zkapi/deployments/mainnet.json
++++ b/zkapi-clientd/internal/zkapi/deployments/mainnet.json
+@@ -47,8 +47,8 @@
+   },
+   "privacy_mode": {
+     "ephemeral_key_source": "oa_org",
+-    "issuer_url": "https://org-staging.openanonymity.ai",
+-    "verifier_url": "https://verifier2.openanonymity.ai",
++    "issuer_url": "https://org-live.openanonymity.ai",
++    "verifier_url": "https://verifier-production-20260917.openanonymity.ai",
+     "openrouter_inference_base": "https://openrouter.ai/api/v1",
+     "lease_ttl_seconds": 300
+   },
 diff --git a/zkapi-clientd/internal/zkapi/diagnostics_test.go b/zkapi-clientd/internal/zkapi/diagnostics_test.go
 new file mode 100644
 index 0000000..bafd374
@@ -981,5 +1331,135 @@ index 0000000..bafd374
 +				t.Fatal("private message leaked")
 +			}
 +		})
++	}
++}
+diff --git a/zkapi-clientd/internal/zkapi/model_budget_test.go b/zkapi-clientd/internal/zkapi/model_budget_test.go
+index 8f4ab08..1da06db 100644
+--- a/zkapi-clientd/internal/zkapi/model_budget_test.go
++++ b/zkapi-clientd/internal/zkapi/model_budget_test.go
+@@ -24,7 +24,9 @@ func addTestModelPolicy(c *Client, prices map[string]uint64, disabled []string)
+ 		disabled = []string{}
+ 	}
+ 	c.inference.Transport = budgetTransport(func(r *http.Request) (*http.Response, error) {
+-		if r.URL.Host == "org-staging.openanonymity.ai" {
++		deployment, _, _ := pinnedDeployment(c.config.Network)
++		issuer, _ := url.Parse(deployment.Privacy.IssuerURL)
++		if r.URL.Host == issuer.Host {
+ 			var value any = prices
+ 			if r.URL.Path == "/chat/pinned-models" {
+ 				value = map[string]any{"disabled_models": disabled}
+@@ -109,11 +111,12 @@ func TestModelsUsePinnedAnonymousPolicyAndHideDisabledOrUnreviewedModels(t *test
+ 		t.Run(network, func(t *testing.T) {
+ 			var calls atomic.Int32
+ 			jar, _ := cookiejar.New(nil)
+-			origin, _ := url.Parse("https://org-staging.openanonymity.ai")
++			deployment, _, _ := pinnedDeployment(network)
++			origin, _ := url.Parse(deployment.Privacy.IssuerURL)
+ 			jar.SetCookies(origin, []*http.Cookie{{Name: "identity", Value: "private-account"}})
+ 			remote := &http.Client{Jar: jar, Transport: budgetTransport(func(r *http.Request) (*http.Response, error) {
+ 				calls.Add(1)
+-				if r.URL.Scheme != "https" || (r.URL.Host != "org-staging.openanonymity.ai" && r.URL.Host != "openrouter.ai") || r.Method != "GET" || r.URL.RawQuery != "" || r.Body != nil {
++				if r.URL.Scheme != "https" || (r.URL.Host != origin.Host && r.URL.Host != "openrouter.ai") || r.Method != "GET" || r.URL.RawQuery != "" || r.Body != nil {
+ 					t.Errorf("unexpected public policy request %s", r.URL)
+ 				}
+ 				for _, header := range []string{"Authorization", "Cookie", "Proxy-Authorization", "HTTP-Referer", "X-Title"} {
+diff --git a/zkapi-clientd/internal/zkapi/testdata/browser-profiles/mainnet.json b/zkapi-clientd/internal/zkapi/testdata/browser-profiles/mainnet.json
+index f5b8baf..d88cc09 100644
+--- a/zkapi-clientd/internal/zkapi/testdata/browser-profiles/mainnet.json
++++ b/zkapi-clientd/internal/zkapi/testdata/browser-profiles/mainnet.json
+@@ -29,7 +29,7 @@
+     "request_proving_key_sha256": "c894b261a13f571d0df36be29734aabf2a8cd7162baddc5e08a50341aa076584",
+     "withdrawal_proving_key_sha256": "8e41398092fdd02b9ff86c6ccbecbd7ce2402e6f22ec162e6124d1d04fe0a668",
+     "circuit_id": "zkapi-v2-note-bound-v1",
+-    "verifier_url": "https://verifier2.openanonymity.ai",
++    "verifier_url": "https://verifier-production-20260917.openanonymity.ai",
+     "openrouter_inference_base": "https://openrouter.ai/api/v1"
+   },
+   "proving_keys_base_url": "./proofs/",
+diff --git a/zkapi-clientd/internal/zkapi/verifier_migration_test.go b/zkapi-clientd/internal/zkapi/verifier_migration_test.go
+new file mode 100644
+index 0000000..b16fd76
+--- /dev/null
++++ b/zkapi-clientd/internal/zkapi/verifier_migration_test.go
+@@ -0,0 +1,81 @@
++package zkapi
++
++import (
++	"bytes"
++	"crypto/sha256"
++	"encoding/hex"
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestMainnetIssuerMigrationPinsOnlyReviewedExactManifestPair(t *testing.T) {
++	identity, current, err := pinnedDeployment("mainnet")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if identity.Privacy.VerifierURL != "https://verifier-production-20260917.openanonymity.ai" || identity.Privacy.IssuerURL != "https://org-live.openanonymity.ai" {
++		t.Fatal("wrong production trust pins")
++	}
++	old := bytes.Replace(current, []byte("https://org-live.openanonymity.ai"), []byte("https://org-staging.openanonymity.ai"), 1)
++	old = bytes.Replace(old, []byte("https://verifier-production-20260917.openanonymity.ai"), []byte("https://verifier2.openanonymity.ai"), 1)
++	hash := sha256.Sum256(old)
++	if hex.EncodeToString(hash[:]) != previousMainnetManifestSHA256 {
++		t.Fatal("old manifest does not match reviewed exact hash")
++	}
++	for name, change := range map[string]func([]byte) []byte{
++		"exact": func(b []byte) []byte { return b },
++		"vault": func(b []byte) []byte {
++			return bytes.Replace(b, []byte(identity.Contract), []byte("0x1111111111111111111111111111111111111111"), 1)
++		},
++		"verifier": func(b []byte) []byte {
++			return bytes.Replace(b, []byte("https://verifier2.openanonymity.ai"), []byte("https://untrusted.example"), 1)
++		},
++		"issuer": func(b []byte) []byte {
++			return bytes.Replace(b, []byte("https://org-staging.openanonymity.ai"), []byte("https://untrusted.example"), 1)
++		},
++		"partial": func(b []byte) []byte {
++			return bytes.Replace(b, []byte("https://org-staging.openanonymity.ai"), []byte("https://org-live.openanonymity.ai"), 1)
++		},
++		"extra": func(b []byte) []byte { return append(b, '\n') },
++	} {
++		t.Run(name, func(t *testing.T) {
++			dir := t.TempDir()
++			file := filepath.Join(dir, "deployment-manifest.json")
++			before := change(append([]byte(nil), old...))
++			if err := os.WriteFile(file, before, 0600); err != nil {
++				t.Fatal(err)
++			}
++			state := filepath.Join(dir, "pending_journal.json")
++			sentinel := []byte("existing note/request/signatures unchanged")
++			if err := os.WriteFile(state, sentinel, 0600); err != nil {
++				t.Fatal(err)
++			}
++			_, err := writeDeploymentManifest(dir, current)
++			after, _ := os.ReadFile(file)
++			saved, _ := os.ReadFile(state)
++			if name == "exact" {
++				if err != nil || !bytes.Equal(after, current) {
++					t.Fatalf("exact migration failed: %v", err)
++				}
++				if _, err = writeDeploymentManifest(dir, current); err != nil {
++					t.Fatal("restart failed", err)
++				}
++			} else if err == nil || !bytes.Equal(before, after) {
++				t.Fatal("unknown source accepted or overwritten")
++			}
++			if !bytes.Equal(saved, sentinel) {
++				t.Fatal("wallet/request changed")
++			}
++		})
++	}
++	for _, target := range [][]byte{append(append([]byte(nil), current...), '\n'), old} {
++		if isMainnetIssuerMigration(old, target) {
++			t.Fatal("unreviewed target admitted")
++		}
++	}
++	_, sepolia, _ := pinnedDeployment("sepolia")
++	if isMainnetIssuerMigration(sepolia, current) {
++		t.Fatal("cross-network migration accepted")
 +	}
 +}
