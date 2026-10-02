@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, readFileSync, realpathSync, lstatSync, accessSync, constants } from 'node:fs';
+import { createReadStream, readFileSync, realpathSync, lstatSync, accessSync, constants, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,8 @@ export async function verifyAccountingRuntime(directory) {
     accessSync(path, constants.R_OK | constants.X_OK);
     binaries[name] = expected;
   }
-  const metadata = execFileSync(process.env.VEYL_GO_BINARY || '/usr/local/go/bin/go', ['version', '-m', resolve(directory, 'zkapi-clientd-control')], { encoding: 'utf8' });
+  const goBinary = process.env.VEYL_GO_BINARY || (existsSync('/usr/local/go/bin/go') ? '/usr/local/go/bin/go' : '/usr/bin/go');
+  const metadata = execFileSync(goBinary, ['version', '-m', resolve(directory, 'zkapi-clientd-control')], { encoding: 'utf8' });
   for (const value of ['GOOS=linux', 'GOARCH=arm64', 'CGO_ENABLED=0', `vcs.revision=${lock.daemonRevision}`, 'vcs.modified=true']) if (!metadata.includes(value)) throw Error('Candidate Go build metadata differs.');
   const expected = { version: 2, sourceRevision: lock.daemonRevision, companionRevision: lock.companionRevision, protocolRevision: lock.protocolRevision,
     patch: 'VEYL_CALL_ACCOUNTING_V1', sourceLockSha256, clientSha256: client.clientSha256, walletSha256: wallet.walletSha256,
