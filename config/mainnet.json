@@ -16,23 +16,25 @@
   "funding": {
     "initialTreasuryEth": null,
     "dailyTreasuryLimitEth": null,
-    "initialLiquidityEth": null,
-    "initialLiquidityTokens": null
+    "initialLiquidityEth": "0",
+    "initialLiquidityTokens": "980000000"
   },
   "agentMarkets": {
     "mainMarketFactory": null,
     "quoteAsset": null,
     "conversionSwapRouter": null,
-    "marketFactory": null
+    "marketFactory": null,
+    "tickSpacing": 200
   },
   "trading": {
     "buyFeeBps": 180,
     "sellFeeBps": 180,
     "lpFeePips": 0,
-    "tickSpacing": 200,
+    "tickSpacing": 1,
     "launchProtection": true,
-    "initialSqrtPriceX96": null,
-    "liquidityCustodyPolicy": "The actual seeded v4 position and any LP fees remain permanently in VeylLiquidityVault. Unused seed inputs and the unallocated token remainder return to the creator; exact launch amounts remain pending approval."
+    "initialSqrtPriceX96": "1771577727172025373304338615273325",
+    "liquidityCustodyPolicy": "The main VEYL position is a canonical Uniswap v4 NFT minted to the deployer, who can inspect and manually transfer it to the dead address. It is not locked while the deployer owns it. Agent-market positions continue to use permanently locked VeylLiquidityVault positions.",
+    "liquidityCustody": "deployer-position-nft"
   },
   "zkapi": {
     "daemonHostPlan": "Installed prelaunch shared-VPS pilot: one running job and daemon pair, fifty saved profiles, two CPU cores and 4 GiB aggregate memory cap with no swap. The authenticated gateway is connected; funded execution and mainnet writes remain disabled. Move to a separate server before growing production workloads.",
@@ -41,5 +43,19 @@
   },
   "confirmations": {
     "freshSignerConfirmed": false
+  },
+  "mainTokenLaunch": {
+    "positionManager": "0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e",
+    "recipient": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+    "startingFdvEth": "2",
+    "actualStartingFdvEth": "2.000040289648088261",
+    "sqrtPriceX96": "1771577727172025373304338615273325",
+    "liquidityEth": "0",
+    "targetLiquidityTokens": "980000000",
+    "maximumCreatorTokens": "20000000",
+    "tickLower": -887272,
+    "tickUpper": 200311,
+    "roundingPolicy": "minimum-liquidity-rounded-up",
+    "maximumRoundingDustWei": "1000000"
   }
 }

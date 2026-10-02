@@ -2,29 +2,34 @@
 // It reads a public-only JSON config and compiled artifacts, never .env or account material.
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { isAddress, keccak256, parseEther, zeroAddress } from 'viem';
+import { isAddress, keccak256, parseEther, stringToHex, zeroAddress } from 'viem';
 import { verifyMainnet } from './check-mainnet.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const SCHEMA = {
   chainId: null,
-  project: { name: null, symbol: null },
+  project: { name: null, symbol: null, launchSalt: null, launchSaltLabel: null },
   addresses: { deployer: null, owner: null, operator: null, protocolRecipient: null, poolInitializer: null },
-  agentMarkets: { mainMarketFactory: null, quoteAsset: null, conversionSwapRouter: null, marketFactory: null },
+  agentMarkets: { mainMarketFactory: null, quoteAsset: null, conversionSwapRouter: null, marketFactory: null, tickSpacing: null },
   funding: { initialTreasuryEth: null, dailyTreasuryLimitEth: null, initialLiquidityEth: null, initialLiquidityTokens: null },
-  trading: { buyFeeBps: null, sellFeeBps: null, lpFeePips: null, tickSpacing: null, initialSqrtPriceX96: null, liquidityCustodyPolicy: null, launchProtection: null },
+  trading: { buyFeeBps: null, sellFeeBps: null, lpFeePips: null, tickSpacing: null, initialSqrtPriceX96: null, liquidityCustodyPolicy: null, launchProtection: null, liquidityCustody: null },
+  mainTokenLaunch: { positionManager: null, recipient: null, startingFdvEth: null, actualStartingFdvEth: null, sqrtPriceX96: null, liquidityEth: null, targetLiquidityTokens: null, maximumCreatorTokens: null, tickLower: null, tickUpper: null, roundingPolicy: null, maximumRoundingDustWei: null },
   zkapi: { daemonHostPlan: null, maxPrepaidEth: null, reconciliationPolicy: null },
   confirmations: { freshSignerConfirmed: null },
 };
 
-function publicSchema(value, schema) {
+const OPTIONAL = new Set(['project.launchSalt', 'project.launchSaltLabel', 'agentMarkets.tickSpacing', 'trading.liquidityCustody', 'mainTokenLaunch']);
+const MAIN_SALT_LABEL = 'veyl:ethereum:main-token:v1', MAIN_SALT = keccak256(stringToHex(MAIN_SALT_LABEL));
+function publicSchema(value, schema, parent = '') {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected a public configuration object.');
   if (Object.keys(value).some(key => !Object.hasOwn(schema, key))) throw new Error('Unrecognized configuration fields; only the public schema is supported.');
   for (const [key, shape] of Object.entries(schema)) {
+    const path = parent ? `${parent}.${key}` : key;
+    if (!Object.hasOwn(value, key) && OPTIONAL.has(path)) continue;
     if (!Object.hasOwn(value, key)) throw new Error('Configuration is missing required schema fields.');
-    if (shape) publicSchema(value[key], shape);
+    if (shape) publicSchema(value[key], shape, path);
     else if (value[key] !== null && !['string', 'number', 'boolean'].includes(typeof value[key])) throw new Error('Invalid public configuration field type.');
-    else if (typeof value[key] === 'string' && /(?:0x)?[0-9a-fA-F]{64}/.test(value[key])) throw new Error('Configuration must not contain key-sized hexadecimal material.');
+    else if (typeof value[key] === 'string' && /(?:0x)?[0-9a-fA-F]{64}/.test(value[key]) && !(path === 'project.launchSalt' && value[key] === MAIN_SALT)) throw new Error('Configuration must not contain key-sized hexadecimal material.');
   }
 }
 
@@ -40,7 +45,10 @@ export function validateConfig(config) {
   check('project.name', value => typeof value === 'string' && Buffer.byteLength(value) <= 64 && value.trim().length > 0);
   check('project.symbol', value => typeof value === 'string' && /^[A-Z0-9]{1,10}$/.test(value));
   for (const key of Object.keys(SCHEMA.addresses)) check(`addresses.${key}`, value => typeof value === 'string' && isAddress(value) && value.toLowerCase() !== zeroAddress);
-  for (const key of Object.keys(SCHEMA.agentMarkets)) check(`agentMarkets.${key}`, value => typeof value === 'string' && isAddress(value) && value.toLowerCase() !== zeroAddress);
+  for (const key of ['mainMarketFactory', 'quoteAsset', 'conversionSwapRouter', 'marketFactory']) check(`agentMarkets.${key}`, value => typeof value === 'string' && isAddress(value) && value.toLowerCase() !== zeroAddress);
+  if (config.agentMarkets.tickSpacing !== undefined) check('agentMarkets.tickSpacing', value => Number.isInteger(value) && value > 0 && value <= 32767);
+  if (config.project.launchSalt !== undefined) check('project.launchSalt', value => value === MAIN_SALT);
+  if (config.project.launchSaltLabel !== undefined) check('project.launchSaltLabel', value => value === MAIN_SALT_LABEL);
   const decimal = value => typeof value === 'string' && /^(0|[1-9]\d*)(\.\d{1,18})?$/.test(value);
   for (const key of Object.keys(SCHEMA.funding)) check(`funding.${key}`, decimal);
   for (const key of ['buyFeeBps', 'sellFeeBps']) check(`trading.${key}`, value => Number.isInteger(value) && value >= 0 && value < 10_000);
@@ -49,6 +57,16 @@ export function validateConfig(config) {
   check('trading.initialSqrtPriceX96', value => typeof value === 'string' && /^[1-9]\d*$/.test(value) && BigInt(value) >= 4_295_128_739n && BigInt(value) < 1_461_446_703_485_210_103_287_273_052_203_988_822_378_723_970_342n);
   check('trading.liquidityCustodyPolicy', value => typeof value === 'string' && value.trim().length > 0 && value.length <= 2_000);
   check('trading.launchProtection', value => typeof value === 'boolean' && (!(config.project.name === 'Veyl' && config.project.symbol === 'VEYL') || value === true));
+  if (config.trading.liquidityCustody !== undefined) check('trading.liquidityCustody', value => ['permanently-locked', 'deployer-position-nft'].includes(value));
+  if (config.mainTokenLaunch) {
+    const plan = config.mainTokenLaunch;
+    check('mainTokenLaunch.positionManager', value => typeof value === 'string' && value.toLowerCase() === '0xbd216513d74c8cf14cf4747e6aaa6420ff64ee9e');
+    check('mainTokenLaunch.recipient', value => typeof value === 'string' && isAddress(value) && value.toLowerCase() === config.addresses.deployer?.toLowerCase());
+    for (const [key, expected] of Object.entries({ startingFdvEth: '2', actualStartingFdvEth: '2.000040289648088261', sqrtPriceX96: '1771577727172025373304338615273325', liquidityEth: '0', targetLiquidityTokens: '980000000', maximumCreatorTokens: '20000000', tickLower: -887272, tickUpper: 200311, roundingPolicy: 'minimum-liquidity-rounded-up', maximumRoundingDustWei: '1000000' })) check(`mainTokenLaunch.${key}`, value => value === expected);
+    if (config.trading.liquidityCustody !== 'deployer-position-nft' || config.trading.tickSpacing !== 1 || config.trading.launchProtection !== true) invalid.push('mainTokenLaunch.marketPolicy');
+    if (config.funding.initialLiquidityEth !== plan.liquidityEth || config.funding.initialLiquidityTokens !== plan.targetLiquidityTokens) invalid.push('mainTokenLaunch.seedPolicy');
+    if (config.trading.initialSqrtPriceX96 !== plan.sqrtPriceX96 || config.trading.buyFeeBps !== 180 || config.trading.sellFeeBps !== 180 || config.trading.lpFeePips !== 0) invalid.push('mainTokenLaunch.priceAndFeePolicy');
+  }
   if (config.trading.launchProtection === true && decimal(config.funding.initialLiquidityTokens) && (parseEther(config.funding.initialLiquidityTokens) < parseEther('980000000') || parseEther(config.funding.initialLiquidityTokens) > parseEther('1000000000'))) invalid.push('funding.initialLiquidityTokens');
   for (const key of ['daemonHostPlan', 'reconciliationPolicy']) check(`zkapi.${key}`, value => typeof value === 'string' && value.trim().length > 0 && value.length <= 2_000);
   check('zkapi.maxPrepaidEth', decimal);
@@ -57,7 +75,7 @@ export function validateConfig(config) {
 }
 
 export async function inspectArtifacts() {
-  const contracts = [ ['AgentKit.sol', 'AgentFactory'], ['AgentKit.sol', 'AgentToken'], ['AgentKit.sol', 'AgentTreasury'], ['Funding.sol', 'RevenueRouter'], ['Funding.sol', 'JobEscrow'], ['VeylFeeHook.sol', 'VeylFeeHook'], ['VeylSwapRouter.sol', 'VeylSwapRouter'], ['VeylMarketFactory.sol', 'VeylMarketFactory'], ['VeylProjectDeployer.sol', 'VeylProjectDeployer'], ['VeylMarketDeployer.sol', 'VeylMarketDeployer'], ['VeylLiquidityVault.sol', 'VeylLiquidityVault'], ['VeylQuoter.sol', 'VeylQuoter'], ...['VeylProjectBuilder', 'VeylMarketBuilder', 'VeylLiquidityBuilder', 'VeylLiquidityDeployer', 'QuoteRevenueRouter'].map(name => [name + '.sol', name]) ];
+  const contracts = [ ['AgentKit.sol', 'AgentFactory'], ['AgentKit.sol', 'AgentToken'], ['AgentKit.sol', 'AgentTreasury'], ['Funding.sol', 'RevenueRouter'], ['Funding.sol', 'JobEscrow'], ['VeylFeeHook.sol', 'VeylFeeHook'], ['VeylSwapRouter.sol', 'VeylSwapRouter'], ['VeylMarketFactory.sol', 'VeylMarketFactory'], ['VeylProjectDeployer.sol', 'VeylProjectDeployer'], ['VeylMarketDeployer.sol', 'VeylMarketDeployer'], ['VeylLiquidityVault.sol', 'VeylLiquidityVault'], ['VeylQuoter.sol', 'VeylQuoter'], ...['VeylProjectBuilder', 'VeylMarketBuilder', 'VeylLiquidityBuilder', 'VeylLiquidityDeployer', 'QuoteRevenueRouter', 'VeylMainLiquidityBuilder', 'VeylMainLiquidityDeployer', 'VeylMainLiquidityPosition'].map(name => [name + '.sol', name]) ];
   return Promise.all(contracts.map(async ([source, name]) => {
     try {
       const artifact = JSON.parse(await readFile(new URL(`contracts/out/${source}/${name}.json`, ROOT), 'utf8'));
@@ -83,10 +101,10 @@ export async function preflight(config, { offline = false, verify = verifyMainne
     deploymentReady: false, configuration, compiledArtifacts, zkapi,
     blockers: [
       'Canonical mainnet pool creation and launch-factory wiring are implemented and tested in a local VM and pinned Ethereum fork; approved mainnet configuration and production application rehearsal remain required.',
-      'Launch price, seed amounts, price range and creator remainder require explicit approval. Actual seeded liquidity and its LP fees are permanently locked; unused seed inputs and remaining tokens go to the creator.',
-      'The Veyl main-token preset requires immutable 2% max-transfer and max-wallet limits for blocks B through B+9. Its creator has no exemption: at least 980 million tokens must actually enter locked liquidity, including after seed refunds. This constraint does not approve an allocation.',
+      'The main VEYL plan uses token-only liquidity at a 2 ETH target valuation, with a 98% liquidity target and up to 2% creator allocation. Its transferable PositionManager NFT belongs to the deployer until that owner transfers it. Agent-market positions remain permanently locked in their vaults.',
+      'The Veyl main-token preset requires immutable 2% max-transfer and max-wallet limits for blocks B through B+9. Its creator has no exemption: liquidity rounds up by a bounded token fraction so the remainder never exceeds 20 million tokens. Operating budgets and signer setup remain separate launch inputs.',
       'Funded zkAPI deposit, inference, signed settlement reconciliation and withdrawal/recovery have not passed end-to-end acceptance.',
-      'Hosted authentication, isolated wallet profiles, bounded execution and recovery are implemented but not activated publicly. Full hosted acceptance, proof-peak sizing and funded operator-policy rehearsal remain required.',
+      'Hosted authentication, isolated wallet profiles and bounded execution have passed public no-spend checks. Funded proof-peak sizing and operator-policy rehearsal remain unperformed.',
       'A fresh signer must be established separately through secure wallet software. This command does not connect to any signer.',
       'Source verification, deployment simulation and reviewed deployment transaction plan are still required.',
     ],

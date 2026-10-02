@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPublicClient, encodeAbiParameters, encodeDeployData, getAddress, getContractAddress, getCreate2Address, http, keccak256, padHex, stringToHex, zeroAddress } from 'viem';
 import { mainnet } from 'viem/chains';
-import { VEYL_MAIN_TOKEN_SALT, VEYL_MAIN_TOKEN_SALT_LABEL } from '../src/mainnet.mjs';
+import { VEYL_MAIN_TOKEN_SALT, VEYL_MAIN_TOKEN_SALT_LABEL, ETHEREUM_POSITION_MANAGER } from '../src/mainnet.mjs';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const MANAGER = '0x000000000004444c5dc75cB358380D2e3dE08A90';
@@ -26,13 +26,15 @@ export function predictPublicAddresses({ config, startNonce = 0n, creator = conf
   creator = getAddress(creator);
   const canonical = config.project.launchSalt !== undefined;
   if (canonical && (config.project.launchSalt !== VEYL_MAIN_TOKEN_SALT || creator !== deployer)) throw new Error('The canonical main-token salt and configured creator must match the launch plan.');
-  const deployments = STAGES.map((contract, index) => ({ contract, nonce: (startNonce + BigInt(index)).toString(), address: getContractAddress({ from: deployer, nonce: startNonce + BigInt(index) }), method: 'CREATE', deployed: null }));
+  const mainPosition = config.trading.liquidityCustody === 'deployer-position-nft';
+  const stages = STAGES.map(name => mainPosition && name === 'VeylLiquidityBuilder' ? 'VeylMainLiquidityBuilder' : name);
+  const deployments = stages.map((contract, index) => ({ contract, nonce: (startNonce + BigInt(index)).toString(), address: getContractAddress({ from: deployer, nonce: startNonce + BigInt(index) }), method: 'CREATE', deployed: null }));
   const addresses = Object.fromEntries(deployments.map(item => [item.contract, item.address]));
   const factory = addresses.VeylMarketFactory, salt = padHex(factory, { size: 32 });
   const definitions = [
     ['VeylProjectDeployer', 'VeylProjectBuilder', [factory, protocolRecipient, MANAGER, zeroAddress, zeroAddress]],
     ['VeylMarketDeployer', 'VeylMarketBuilder', [factory, MANAGER, zeroAddress]],
-    ['VeylLiquidityDeployer', 'VeylLiquidityBuilder', [factory, MANAGER]]
+    mainPosition ? ['VeylMainLiquidityDeployer', 'VeylMainLiquidityBuilder', [factory, MANAGER, ETHEREUM_POSITION_MANAGER, creator, VEYL_MAIN_TOKEN_SALT]] : ['VeylLiquidityDeployer', 'VeylLiquidityBuilder', [factory, MANAGER]]
   ];
   const artifacts = [];
   const children = definitions.map(([contract, builder, args]) => {
@@ -54,9 +56,11 @@ export function predictPublicAddresses({ config, startNonce = 0n, creator = conf
   }
   return { version: 1, chainId: 1, generatedAt: new Date().toISOString(), calculationOnly: true, transactionSent: false, deployer, creator, protocolRecipient,
     poolManager: MANAGER, quoteAsset: zeroAddress, startingNonce: startNonce.toString(), deployments, factoryChildren: children, token, artifacts,
+    ...(mainPosition ? { mainTokenLaunch: config.mainTokenLaunch, liquidityCustody: 'deployer-position-nft', liquidityBuilderArguments: [MANAGER, ETHEREUM_POSITION_MANAGER, creator, VEYL_MAIN_TOKEN_SALT] } : {}),
     requirements: [
       'The same public deployer must CREATE the five contracts at the exact listed nonces and in this order, with no intervening transaction.',
       'The factory must use the listed helpers, PoolManager, protocol recipient, native ETH quote and zero conversion router.',
+      ...(mainPosition ? ['The main factory must use VeylMainLiquidityBuilder with the canonical PositionManager, listed creator and canonical salt. Its liquidity NFT is minted to the creator and is not locked until custody changes.'] : []),
       canonical ? 'The token creator must be the listed creator and its treasury owner must match configured owner. The main token uses the published canonical launch salt, independent of workspace ID.' : 'The token creator must be the listed creator; the exact saved project.id determines its creator-scoped salt.',
       'The compiled creation bytecode hashes must remain identical; rebuilding changed source or metadata can change CREATE2 addresses.',
       'Predicted addresses do not show deployment, available liquidity, ownership or approval to spend.'

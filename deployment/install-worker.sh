@@ -73,7 +73,7 @@ runuser -u veyl -- /usr/bin/node --input-type=module - "$release" <<'NODE'
 import { pathToFileURL } from 'node:url';
 const release = process.argv[2], { MainnetMarkets } = await import(pathToFileURL(release + '/src/mainnet.mjs'));
 const mainnet = new MainnetMarkets();
-for (const name of ['VeylMarketFactory', 'VeylMarketDeployer', 'VeylProjectDeployer', 'VeylProjectBuilder', 'VeylMarketBuilder', 'VeylLiquidityBuilder', 'VeylLiquidityDeployer', 'QuoteRevenueRouter', 'VeylFeeHook', 'VeylLiquidityVault', 'VeylSwapRouter', 'VeylQuoter', 'RevenueRouter', 'AgentTreasury', 'AgentToken']) {
+for (const name of ['VeylMainLiquidityBuilder','VeylMainLiquidityDeployer','VeylMainLiquidityPosition','VeylMarketFactory', 'VeylMarketDeployer', 'VeylProjectDeployer', 'VeylProjectBuilder', 'VeylMarketBuilder', 'VeylLiquidityBuilder', 'VeylLiquidityDeployer', 'QuoteRevenueRouter', 'VeylFeeHook', 'VeylLiquidityVault', 'VeylSwapRouter', 'VeylQuoter', 'RevenueRouter', 'AgentTreasury', 'AgentToken']) {
   const artifact = mainnet.artifact(name);
   if (!Array.isArray(artifact.abi) || !/^0x[0-9a-f]+$/i.test(artifact.bytecode?.object || '') || !/^0x[0-9a-f]+$/i.test(artifact.deployedBytecode?.object || '')) throw new Error('Compiled mainnet artifacts are absent or invalid. Build the reviewed release locally before installing.');
 }

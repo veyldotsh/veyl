@@ -52,7 +52,7 @@ import { readFileSync } from 'node:fs';
 const release = process.argv[2];
 const { MainnetMarkets } = await import(pathToFileURL(release + '/src/mainnet.mjs'));
 const markets = new MainnetMarkets();
-for (const name of ['VeylMarketFactory','VeylMarketDeployer','VeylProjectDeployer','VeylProjectBuilder','VeylMarketBuilder','VeylLiquidityBuilder','VeylLiquidityDeployer','QuoteRevenueRouter','VeylFeeHook','VeylLiquidityVault','VeylSwapRouter','VeylQuoter','RevenueRouter','AgentTreasury','AgentToken']) {
+for (const name of ['VeylMainLiquidityBuilder','VeylMainLiquidityDeployer','VeylMainLiquidityPosition','VeylMarketFactory','VeylMarketDeployer','VeylProjectDeployer','VeylProjectBuilder','VeylMarketBuilder','VeylLiquidityBuilder','VeylLiquidityDeployer','QuoteRevenueRouter','VeylFeeHook','VeylLiquidityVault','VeylSwapRouter','VeylQuoter','RevenueRouter','AgentTreasury','AgentToken']) {
   const artifact = markets.artifact(name), init = artifact.bytecode?.object, runtime = artifact.deployedBytecode?.object;
   if (!Array.isArray(artifact.abi) || !/^0x[0-9a-f]+$/i.test(init || '') || !/^0x[0-9a-f]+$/i.test(runtime || '')) throw Error('Invalid artifact: ' + name);
   if ((runtime.length - 2) / 2 > 24576 || (init.length - 2) / 2 + (name === 'VeylMarketFactory' ? 256 : 0) > 49152) throw Error('Contract deployment size exceeds limit: ' + name);

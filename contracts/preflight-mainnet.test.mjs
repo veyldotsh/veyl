@@ -6,6 +6,7 @@ import { validateConfig, preflight } from '../scripts/preflight-mainnet.mjs';
 import { readManifest, verifyMainnet } from '../scripts/check-mainnet.mjs';
 
 const example = JSON.parse(await readFile(new URL('../config/mainnet.example.json', import.meta.url), 'utf8'));
+const approved = JSON.parse(await readFile(new URL('../config/mainnet.json', import.meta.url), 'utf8'));
 const config = () => structuredClone(example);
 const bytecode = '0x60006000';
 const manifest = () => ({
@@ -38,6 +39,26 @@ test('public config rejects key material and unsupported fields without reflecti
   assert.throws(() => validateConfig(keySized), /key-sized/);
   const wrongChain = config(); wrongChain.chainId = 8453;
   assert.ok(validateConfig(wrongChain).invalid.includes('chainId'));
+});
+
+test('approved main NFT plan preserves canonical address inputs and rejects mismatched economics', () => {
+  const result = validateConfig(approved);
+  assert.deepEqual(result.invalid, ['confirmations.freshSignerConfirmed']);
+  assert.equal(result.complete, false);
+  for (const [path, value, expected] of [
+    ['mainTokenLaunch.recipient', '0x1111111111111111111111111111111111111111', 'mainTokenLaunch.recipient'],
+    ['trading.liquidityCustody', 'permanently-locked', 'mainTokenLaunch.marketPolicy'],
+    ['trading.initialSqrtPriceX96', '1771577727172025373304338615273326', 'mainTokenLaunch.priceAndFeePolicy'],
+    ['trading.lpFeePips', 3000, 'mainTokenLaunch.priceAndFeePolicy'],
+    ['funding.initialLiquidityEth', '2', 'mainTokenLaunch.seedPolicy'],
+    ['mainTokenLaunch.maximumRoundingDustWei', '1000001', 'mainTokenLaunch.maximumRoundingDustWei'],
+  ]) {
+    const changed = structuredClone(approved), [group, field] = path.split('.');
+    changed[group][field] = value;
+    assert.ok(validateConfig(changed).invalid.includes(expected), path);
+  }
+  const wrongSalt = structuredClone(approved); wrongSalt.project.launchSalt = '0x' + 'ab'.repeat(32);
+  assert.throws(() => validateConfig(wrongSalt), /key-sized/);
 });
 
 test('public config enforces fee, amount, address and price boundaries', () => {

@@ -12,6 +12,9 @@ const artifacts = [
   ['VeylProjectBuilder.sol', 'VeylProjectBuilder'],
   ['VeylMarketBuilder.sol', 'VeylMarketBuilder'],
   ['VeylLiquidityBuilder.sol', 'VeylLiquidityBuilder'],
+  ['VeylMainLiquidityBuilder.sol', 'VeylMainLiquidityBuilder'],
+  ['VeylMainLiquidityDeployer.sol', 'VeylMainLiquidityDeployer'],
+  ['VeylMainLiquidityPosition.sol', 'VeylMainLiquidityPosition'],
 ];
 await mkdir(new URL('./abi/', import.meta.url), { recursive: true });
 for (const [source, name] of artifacts) {

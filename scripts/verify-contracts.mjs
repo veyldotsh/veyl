@@ -15,7 +15,10 @@ const contracts = {
   VeylLiquidityVault: 'src/market/VeylLiquidityVault.sol', VeylQuoter: 'src/market/VeylQuoter.sol',
   QuoteRevenueRouter: 'src/QuoteRevenueRouter.sol', VeylProjectBuilder: 'src/market/VeylProjectBuilder.sol',
   VeylMarketBuilder: 'src/market/VeylMarketBuilder.sol', VeylLiquidityBuilder: 'src/market/VeylLiquidityBuilder.sol',
-  VeylLiquidityDeployer: 'src/market/VeylLiquidityDeployer.sol'
+  VeylLiquidityDeployer: 'src/market/VeylLiquidityDeployer.sol',
+  VeylMainLiquidityBuilder: 'src/market/VeylMainLiquidityBuilder.sol',
+  VeylMainLiquidityDeployer: 'src/market/VeylMainLiquidityDeployer.sol',
+  VeylMainLiquidityPosition: 'src/market/VeylMainLiquidityPosition.sol'
 };
 export class VerificationError extends Error {}
 const reject = message => { throw new VerificationError(message); };

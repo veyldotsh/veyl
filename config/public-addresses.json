@@ -1,7 +1,7 @@
 {
   "version": 1,
   "chainId": 1,
-  "generatedAt": "2026-10-02T01:46:39.084Z",
+  "generatedAt": "2026-10-02T02:13:18.882Z",
   "calculationOnly": true,
   "transactionSent": false,
   "deployer": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
@@ -33,7 +33,7 @@
       "deployed": false
     },
     {
-      "contract": "VeylLiquidityBuilder",
+      "contract": "VeylMainLiquidityBuilder",
       "nonce": "3",
       "address": "0x6136c29498De82B2270DD589B6D06a6Cb8f31646",
       "method": "CREATE",
@@ -79,15 +79,18 @@
       "deployed": false
     },
     {
-      "contract": "VeylLiquidityDeployer",
+      "contract": "VeylMainLiquidityDeployer",
       "builder": "0x6136c29498De82B2270DD589B6D06a6Cb8f31646",
       "salt": "0x000000000000000000000000Dca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
       "constructorArguments": [
         "0xDca5aa52402Bd413B1604b5468C672Dc2BCcBa73",
-        "0x000000000004444c5dc75cB358380D2e3dE08A90"
+        "0x000000000004444c5dc75cB358380D2e3dE08A90",
+        "0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e",
+        "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+        "0x672a9aa9fcb689142afad0e644046d02e8713ac0718f81d7f72f22577e81be59"
       ],
-      "initCodeHash": "0x37c7e7f5e2f53e05482377bc8a45f0daca7e3902f60072083aa148a11d820521",
-      "address": "0x2199b14a3B3Eb38854B8F8F9EB1066Fc07d70d7E",
+      "initCodeHash": "0xe80bdb296a6191611e0cb8ed6bc10b0ba32c6efe5be61dfe91550d6b6be8a32e",
+      "address": "0xB1AB4d362713bd79e7Dde7E5a43993F76F9A745e",
       "method": "CREATE2",
       "deployed": false
     }
@@ -119,9 +122,9 @@
       "creationBytecodeKeccak256": "0x5a8c3827d460df32cd57de0ab1f82869fa994517e4473ad415326f4a8e35c4b1"
     },
     {
-      "contract": "VeylLiquidityDeployer",
-      "path": "contracts/out/VeylLiquidityDeployer.sol/VeylLiquidityDeployer.json",
-      "creationBytecodeKeccak256": "0x56478429b31dfcd0f887feb305a518d11271b13b3fbbc4a1f624dd729675222a"
+      "contract": "VeylMainLiquidityDeployer",
+      "path": "contracts/out/VeylMainLiquidityDeployer.sol/VeylMainLiquidityDeployer.json",
+      "creationBytecodeKeccak256": "0xe770826466f6d5cf9d75160b512c98c639c049a679a16d9800fcca5887e8a3fd"
     },
     {
       "contract": "AgentToken",
@@ -129,18 +132,40 @@
       "creationBytecodeKeccak256": "0x0c8b00ce35e3864046867f412100f924433e9c079409e364a72b186025ea7a51"
     }
   ],
+  "mainTokenLaunch": {
+    "positionManager": "0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e",
+    "recipient": "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+    "startingFdvEth": "2",
+    "actualStartingFdvEth": "2.000040289648088261",
+    "sqrtPriceX96": "1771577727172025373304338615273325",
+    "liquidityEth": "0",
+    "targetLiquidityTokens": "980000000",
+    "maximumCreatorTokens": "20000000",
+    "tickLower": -887272,
+    "tickUpper": 200311,
+    "roundingPolicy": "minimum-liquidity-rounded-up",
+    "maximumRoundingDustWei": "1000000"
+  },
+  "liquidityCustody": "deployer-position-nft",
+  "liquidityBuilderArguments": [
+    "0x000000000004444c5dc75cB358380D2e3dE08A90",
+    "0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e",
+    "0xC29Df074044B6812Dfa72aD43d2575bDad257357",
+    "0x672a9aa9fcb689142afad0e644046d02e8713ac0718f81d7f72f22577e81be59"
+  ],
   "requirements": [
     "The same public deployer must CREATE the five contracts at the exact listed nonces and in this order, with no intervening transaction.",
     "The factory must use the listed helpers, PoolManager, protocol recipient, native ETH quote and zero conversion router.",
+    "The main factory must use VeylMainLiquidityBuilder with the canonical PositionManager, listed creator and canonical salt. Its liquidity NFT is minted to the creator and is not locked until custody changes.",
     "The token creator must be the listed creator and its treasury owner must match configured owner. The main token uses the published canonical launch salt, independent of workspace ID.",
     "The compiled creation bytecode hashes must remain identical; rebuilding changed source or metadata can change CREATE2 addresses.",
     "Predicted addresses do not show deployment, available liquidity, ownership or approval to spend."
   ],
   "missingForTokenPrediction": [],
   "chainObservation": {
-    "checkedAt": "2026-10-02T01:46:39.471Z",
+    "checkedAt": "2026-10-02T02:13:19.232Z",
     "rpcHost": "ethereum-rpc.publicnode.com",
-    "blockNumber": "26101443",
+    "blockNumber": "26101576",
     "confirmedNonce": 0,
     "pendingNonce": 0,
     "deployerHasCode": false,
